@@ -311,6 +311,7 @@ sub calc($) {
   } elsif ($head=~/\AGIF(8[79]a)/) {
     $bbi->{FileFormat}='GIF';
     $bbi->{SubFormat}=$1;
+    $bbi->{ColorSpace}='Indexed';
     ($dummy,$bbi->{URX},$bbi->{URY})=unpack("A6vv",$head);
   } elsif ($head=~/\A(\377+\330)\377/) {
     $bbi->{FileFormat}='JPEG';
