@@ -2247,20 +2247,11 @@ ICO only
 ICO only
 
 
-=item Info.num_planes
-
-ICO only
-
-
 =item Info.credits
 
 FBM only
 
 =item Info.title
-
-FBM only
-
-=item Info.num_planes
 
 FBM only
 
@@ -2302,7 +2293,7 @@ GEM only
 
 =item Info.num_planes
 
-PM only
+PM, ICO, FBM only
 
 =item Info.num_bands
 
