@@ -477,10 +477,11 @@ sub calc($) {
       goto do_pdf_slow if !length $mediabox;
     }
     pdf_get_boxes($F, $xref, $pages, $bbi);
-  } elsif (substr($head,0,5) eq "%!PS-") {
+  } elsif (substr($head,0,4) eq "%!PS") {
     # Dat: the user should not trust Val.languagelevel blindly. There are far
     #      too many PS files hanging around that do not conform to any standard.
-    $bbi->{FileFormat}=($head=~/\A[^\n\r]*?\bEPSF-/) ? "EPS" : "PS";
+    $bbi->{FileFormat}=$bbi->{SubFormat}=
+      ($head=~/\A[^\n\r]*?\bEPSF-/) ? "EPS" : "PS";
     goto SYerr if $head!~s@[^\n\r]*[\n\r]+@@;
     # vvv Dat `+' is `or' with full boolean eval
     until ($head=~s@[\n\r]%%EndComments.*@@s + $head=~s@[\n\r](?:[^%]|%[^%]).*@@s) {
