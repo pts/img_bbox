@@ -7,14 +7,35 @@ eval '(exit $?0)' && eval 'PERL_BADLANG=x;PATH="$PATH:.";export PERL_BADLANG\
 ;#Don't touch/remove lines 1--7: https://pts.github.io/Magic.Perl.Header
 
 #
-# img_bbox.pl -- extract file format and bbox (dimension) information from
-#   image files
+# img_bbox.pl -- Perl script to detect file format and media parameters
 # by pts@fazekas.hu at Sat Dec  7 21:31:01 CET 2002
+#
+# img_bbox.pl is a standalone Perl script that can detect file format,
+# width, height, bounding box and
+# other meta-information from image files. Supported vector formats are:
+# PDF, Flash SWF, EPS, PS, DVI and FIG. Supported raster image formats are:
+# GIF, JPEG, PNG, TIFF, XPM, XBM1, XBM, PNM, PBM, PGM, PPM, PCX, LBM, other
+# IFF, Windows and OS/2 BMP, MIFF, Gimp XCF, Windows ICO, Adobe PSD, FBM,
+# SunRaster, CMUWM, Utah RLE, Photo CD PCD, XWD, GEM, McIDAS, PM, SGI IRIS,
+# FITS, VICAR, PDS, FIT, Fax G3, Targa TGA and Faces.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# Extracting the image size is not supported for: other IFF, FIG.
 #
 # Dat: we know most of xloadimage-1.16, most of of file(1)-debian-potato,
 #   all of sam2p-0.40, all of xv-3.10
 # Dat: only in xloadimage: g3Ident,        g3Load,        "G3 FAX Image", (hard to identify file format)
 # Dat: only in xloadimage: macIdent,       macLoad,       "MacPaint Image", (stupid, black-white)
+# Imp: multiple paper sizes
 #
 use integer; # important
 use strict; # not so important
@@ -1251,3 +1272,45 @@ for my $filename (@ARGV) { work $filename }
 # } else { work $filename }
 
 __END__
+
+=head1 NAME
+
+img_bbox.pl - Extract file format and size from image files
+
+=head1 SYNOPSIS
+
+B<img_bbox.pl>	S<[ --long ]>
+	S<[ -- ]>
+	S<I<filename.image>>
+	S<[ ... ]>
+
+=head1 DESCRIPTION
+
+img_bbox.pl is a standalone Perl script that can detect file format,
+width, height, bounding box and
+other meta-information from image files. Supported vector formats are:
+PDF, Flash SWF, EPS, PS, DVI and FIG. Supported raster image formats are:
+GIF, JPEG, PNG, TIFF, XPM, XBM1, XBM, PNM, PBM, PGM, PPM, PCX, LBM, other
+IFF, Windows and OS/2 BMP, MIFF, Gimp XCF, Windows ICO, Adobe PSD, FBM,
+SunRaster, CMUWM, Utah RLE, Photo CD PCD, XWD, GEM, McIDAS, PM, SGI IRIS,
+FITS, VICAR, PDS, FIT, Fax G3, Targa TGA and Faces.
+
+=head1 LICENSE
+
+This program is free software; you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation; either version 2 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+=head1 AUTHOR
+
+PE<0xE9>ter SzabE<0xF3> <F<pts@fazekas.hu>>
+
+=head1 SEE ALSO
+
+file(1)
