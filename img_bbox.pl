@@ -248,7 +248,7 @@ sub pdf_rewrite($;$) {
 #**   file to the beginning of the object data (i.e just before `5 0 obj')
 #** @return string containing PDF source code, or undef on error
 sub pdf_read_obj($) {
-  my $F=$_[0];  my $L=1;  my $M;  my $S="";  my $RET; # !! $L=1
+  my $F=$_[0];  my $L=1024;  my $M;  my $S="";  my $RET;
   while (1) { # read as much data as necessary
     return undef if 0>($M=read $F, $S, $L, length($S));
     $RET=pdf_rewrite($S,1);
@@ -341,7 +341,6 @@ sub pdf_ref($$$$) {
 #** @param $_[2] a PDF source dict (`<< ... >>') or array
 #** @param $_[3] a key (`/...')
 sub pdf_get($$$$) {
-  # Imp: array gets
   my $F=$_[0]; my $XREF=$_[1]; my $S=$_[2]; my $KEY=$_[3]; my $POS=0;
   my $DEPTH=0; my $IS_DICT; my $C=0; my $N=0;
   ## print "\n";
@@ -351,7 +350,7 @@ sub pdf_get($$$$) {
     if ($1 eq '>>' or $1 eq ']') {
       return undef if 0==$DEPTH--;
       last if !$DEPTH;
-      $N++ if 1==$DEPTH; # !! $N=0
+      $N++ if 1==$DEPTH;
     }
     elsif ($DEPTH==1 and !$IS_DICT and $KEY==$N) { $POS=pos($S)-=length($1)+1; goto do_ret }
     elsif ($1 eq '<<') { $IS_DICT=1 if 0==$DEPTH++ }
@@ -419,8 +418,8 @@ sub pdf_get_boxes($$$$) {
          or $box!~m@ \[ ([0-9eE.-]+) ([0-9eE.-]+) ([0-9eE.-]+) ([0-9eE.-]+) \]\Z(?!\n)@
          or !defined c_numval($1) or !defined c_numval($2) or !defined c_numval($3) or !defined c_numval($4);
     ($bbi->{LLX},$bbi->{LLY},$bbi->{URX},$bbi->{URY})=($1+0,$2+0,$3+0,$4+0) if $name eq 'MediaBox';
-    $name="Info.$name";
-    ($bbi->{$name}[0],$bbi->{$name}[1],$bbi->{$name}[2],$bbi->{$name}[3])=($1+0,$2+0,$3+0,$4+0);
+    my $name2="Info.$name";
+    ($bbi->{$name2}[0],$bbi->{$name2}[1],$bbi->{$name2}[2],$bbi->{$name2}[3])=($1+0,$2+0,$3+0,$4+0);
   }
 }
 
@@ -631,7 +630,7 @@ sub img_bbox($) {
     
     my $pages;
     my $type;
-    if (!defined $page1obj) {
+    if (!defined $page1obj) { do_pdf_slow:
       ## die $trailer;
       ## die pdf_ref($F,$xref,37550,0);
       ## die pdf_get($F,$xref,$trailer,'/ID');
@@ -658,10 +657,11 @@ sub img_bbox($) {
         $kids=pdf_get($F,$xref,$pages,'/Kids');
         goto IOerr if !defined $kids; goto SYerr if !length $kids;
         ## die $kids;
-        $pages=pdf_get($F,$xref,$kids,0); # Imp: error return ary[str]
+        $pages=pdf_get($F,$xref,$kids,0);
         ## die $pages;
         goto IOerr if !defined $pages; goto SYerr if !length $pages;
       }
+      goto SYerr if $type ne ' /Page';
       # Dat: cannot set $page1obj properly here, because it might be a direct object
       $bbi->{'Info.page1obj'}=$pdf_last_ref0;
     } else {
@@ -670,8 +670,11 @@ sub img_bbox($) {
       goto IOerr if !defined $pages;
       $type=pdf_get($F,$xref,$pages,'/Type');
       goto IOerr if !defined $type;
+      goto SYerr if $type ne ' /Page';
+      my $mediabox=pdf_get($F,$xref,$pages,'/MediaBox');
+      goto IOerr if !defined $mediabox;
+      goto do_pdf_slow if !length $mediabox;
     }
-    goto SYerr if $type ne ' /Page';
     pdf_get_boxes($F, $xref, $pages, $bbi);
   } elsif (substr($head,0,5) eq "%!PS-") {
     # Dat: the user should not trust Val.languagelevel blindly. There are far
