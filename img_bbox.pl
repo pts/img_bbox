@@ -381,8 +381,9 @@ sub calc($) {
     $bbi->{FileFormat}='BioRad';
     ($bbi->{URX},$bbi->{URY},$bbi->{'Info.num_pages'})=unpack("nnn",$head);
   } elsif ($head=~/\A(\377+\330)\377/) {
+    # Imp: EXIF
     $bbi->{FileFormat}='JPEG';
-    die if !seek $F, length($1)-length($head), 1;
+    goto IOerr if !seek $F, length($1)-length($head), 1;
     my $id_rgb=0;
     my $had_jfif=0;
     my $cpp;
