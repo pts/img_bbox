@@ -350,14 +350,14 @@ sub img_bbox($) {
     # 'URX' => 0, 'URY' => 0 # default: missing; may be float; in `bp'
   };
   binmode $F;
-  if (0>read $F, $head, 256) { IOerr: $bbi->{Error}="IO: $!"; return $bbi }
+  if (0>read $F, $head, 256) { IOerr: $bbi->{Error}="IO: $!"; goto done }
   if (length($head)==0) { $bbi->{FileFormat}='Empty'; return $bbi }
   if ($head=~m@\A\s*/[*]\s+XPM\s+[*]/@) { # XPM
     $bbi->{FileFormat}='XPM';
     goto IOerr if !seek $F, -length($head), 1;
     select($F); $/='"'; select(STDOUT); <$F>;
     $head=<$F>;
-    if ($head!~/\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+).*"\Z(?!\n)/s) { SYerr: $bbi->{Error}='syntax'; return $bbi }
+    if ($head!~/\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+).*"\Z(?!\n)/s) { SYerr: $bbi->{Error}='syntax'; goto done }
     # width, height, length(palette), length(pixelchar)
     $bbi->{URX}=0+$1;
     $bbi->{URY}=0+$2;
@@ -578,7 +578,7 @@ sub img_bbox($) {
     while ($head=~/^%%([A-Za-z]+):?\s*((?:.*\S)?)/gm) {
       next if $2 ne '(atend)';
       # read additional ADSC comments from the last 1024 bytes of the file
-      goto IOerr if !seek $F, -1024, 2; # Dat: seek to EOF
+      goto IOerr if !seek $F, -1024, 2 and !seek $F, 0, 0; # Dat: seek to EOF
       $dummy=tell $F;
       goto IOerr if $dummy<$headlen and $headlen-$dummy!=read $F, $val, $headlen-$dummy;
       goto IOerr if 0>read $F, $val, 1024;
@@ -1046,6 +1046,7 @@ sub img_bbox($) {
   } else {
     $bbi->{Error}='unrecognised FileFormat'
   }
+ done:
   delete $bbi->{'LLX'} if !exists $bbi->{'URX'};
   delete $bbi->{'LLY'} if !exists $bbi->{'URY'};
   $bbi
