@@ -694,12 +694,39 @@ sub calc($) {
     $bbi->{URX}=0+$1; $bbi->{URY}=0+$2;
   } elsif (substr($head,0,3) eq 'FWS') {
     $bbi->{FileFormat}='SWF'; # Macromedia ShockWave Flash
+    goto SYerr if length($head)<16;
     my $nbits=get_bits_msb($head, 64, 5);
     no integer;
     $bbi->{URX}=get_bits_msb($head, 69+  $nbits, $nbits)/20.0;
     $bbi->{LLX}=get_bits_msb($head, 69,          $nbits)/20.0;
     $bbi->{URY}=get_bits_msb($head, 69+3*$nbits, $nbits)/20.0;
     $bbi->{LLY}=get_bits_msb($head, 69+2*$nbits, $nbits)/20.0;
+    # Dat: the flash file 7 spec
+    #      (http://download.macromedia.com/pub/flash/flash_file_format_specification.pdf)
+    #      says that LLX and LLY must be zero
+    goto SYerr if $bbi->{LLX}!=0 or $bbi->{LLY}!=0;
+  } elsif (substr($head,0,3) eq 'CWS') {
+    $bbi->{FileFormat}='SWF'; # Macromedia ShockWave Flash
+    $bbi->{SubFormat}='compressed';
+    goto SYerr if length($head)<10;
+    # Dat: after the 1st 8 bytes, /FlateDecode has to be applied
+    # Dat: we skip 1st 8 bytes + 2 bytes zlib header, and add gzip header
+    goto IOerr if !seek $F, 10-length($head), 1;
+    my $data="\x1f\x8b\x08\0\0\0\0\0\0\xff"; # Dat: simple gzip header (10 bytes)
+    # vvv Dat: the output buffer of gzip is 32768 bytes, so if we read 34000 bytes
+    #     of compressed data, there will be surely uncompressed output
+    goto IOerr if !read $F, $data, 34000, length($data); # Dat: the beginning of the ZIP stream is enough
+    # Imp: base64 encode
+    $head="FWS.....".readpipe("echo ".unpack("H*",$data)." | perl -pe'chomp;\$_=pack(\"H*\",\$_)' | gzip -cd 2>/dev/null");
+    goto IOerr if length($head)<16;
+    # vvv Imp: code reuse with SWF
+    my $nbits=get_bits_msb($head, 64, 5);
+    no integer;
+    $bbi->{URX}=get_bits_msb($head, 69+  $nbits, $nbits)/20.0;
+    $bbi->{LLX}=get_bits_msb($head, 69,          $nbits)/20.0;
+    $bbi->{URY}=get_bits_msb($head, 69+3*$nbits, $nbits)/20.0;
+    $bbi->{LLY}=get_bits_msb($head, 69+2*$nbits, $nbits)/20.0;
+    goto SYerr if $bbi->{LLX}!=0 or $bbi->{LLY}!=0;
   } elsif (substr($head,0,14) eq "gimp xcf file\0") { # GIMP XCF image data
     $bbi->{SubFormat}='version.000';
    do_XCF:
