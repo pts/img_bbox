@@ -1214,20 +1214,40 @@ sub img_bbox($) {
 # my $filename="/home/guests/pts/eg/th/lm2.pdf";
 # my $filename="/tmp/PLRM.pdf";
 
+my $opt_long_p=0;
+
 sub work(@) {
   my $filename=$_[0];
   die "$0: $filename: $!\n" unless open F, "< $filename";
-  print STDERR "$filename\n";
+  ## print STDERR "$filename\n";
   my $bbi=img_bbox(\*F);
-  # print "$filename: ", Dumper($bbi);
-  my $LLX=defined $bbi->{LLX} ? $bbi->{LLX} : "??";
-  my $LLY=defined $bbi->{LLY} ? $bbi->{LLY} : "??";
-  my $URX=defined $bbi->{URX} ? $bbi->{URX} : "??";
-  my $URY=defined $bbi->{URY} ? $bbi->{URY} : "??";
-  my $Error=defined $bbi->{Error} ? " error:$bbi->{Error}" : "";
-  print "$filename $LLX $LLY $URX $URY$Error\n";
+  if ($opt_long_p) {
+    ## print "$filename: ", Dumper($bbi);
+    print "$filename\n";
+    for my $key (sort keys %$bbi) {
+      print "  $key = ";
+      my $val=$bbi->{$key};
+      print( (ref($val)eq'ARRAY') ? "[ @$val ]\n" : "$val\n");
+    }
+  } else {
+    my $FileFormat=defined $bbi->{FileFormat} ? $bbi->{FileFormat} : "??";
+    my $LLX=defined $bbi->{LLX} ? $bbi->{LLX} : "??";
+    my $LLY=defined $bbi->{LLY} ? $bbi->{LLY} : "??";
+    my $URX=defined $bbi->{URX} ? $bbi->{URX} : "??";
+    my $URY=defined $bbi->{URY} ? $bbi->{URY} : "??";
+    my $Error=defined $bbi->{Error} ? " error:$bbi->{Error}" : "";
+    print "$filename $FileFormat $LLX $LLY $URX $URY$Error\n";
+  }
 }
 
-if (@ARGV) { for my $filename (@ARGV) { work $filename } }
-      else { work $filename }
+die "This is img_bbox.pl by pts\@fazekas.hu
+Usage: $0 [--long] [--] <filename.image> [...]\n" if !@ARGV;
+
+if (@ARGV and $ARGV[0]eq'--long') { shift @ARGV; $opt_long_p=1 }
+if (@ARGV and $ARGV[0]eq'--') { shift @ARGV }
+
+#if (@ARGV) {
+for my $filename (@ARGV) { work $filename }
+# } else { work $filename }
+
 __END__
