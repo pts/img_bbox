@@ -174,6 +174,7 @@ use integer;
 use strict;
 use Htex::PDFread;
 use Htex::dimen;
+use Htex::papers;
 use Pts::string;
 # use Data::Dumper;
 
@@ -933,8 +934,13 @@ sub calc($) {
     $bbi->{Error}='unrecognised FileFormat'
   }
  done:
-  delete $bbi->{'LLX'} if !exists $bbi->{'URX'};
-  delete $bbi->{'LLY'} if !exists $bbi->{'URY'};
+  if (exists $bbi->{URX} and exists $bbi->{URY}) {
+    ($bbi->{Paper},$bbi->{PaperWidth},$bbi->{PaperHeight})=@L[0,1,2] if
+      @L=Htex::papers::valid_bp($bbi->{URX},$bbi->{URY},$bbi->{LLX},$bbi->{LLY});
+  } else {
+    delete $bbi->{LLX} if !exists $bbi->{URX};
+    delete $bbi->{LLY} if !exists $bbi->{URY};
+  }
   $bbi
 }
 
@@ -1293,6 +1299,183 @@ sub import {
   shift;
   for my $p (@_ ? @_ : qw{pdf_get_boxes pdf_get pdf_read_xref pdf_read_obj
     pdf_rewrite pdf_ref}) { *{$package."::$p"}=\&{$p} }
+}
+
+just::end}
+
+BEGIN{$ INC{'Htex/papers.pm'}='Htex/papers.pm'} {
+package Htex::papers;
+# contains paper size information
+# by pts@fazekas.hu at Sun Dec 22 00:30:58 CET 2002
+use just;
+use integer;
+use strict;
+use Htex::dimen;
+
+my @papers=(
+#
+# paper.txt
+# by pts@fazekas.hu at Tue Jan 16 18:21:59 CET 2001
+# by pts@fazekas.hu at Tue Jan 16 19:13:16 CET 2001
+#
+# Examined: dvips, gs, libpaperg
+#
+# all units are measured in Big Points (bp)
+# 72 bp == 1 in
+# 2.54 cm == 1 in
+#
+# papername	width	height
+qw{Comm10	297	684},
+qw{Monarch	279	540},
+qw{halfexecutive 378	522},
+
+qw{Legal	612	1008},
+qw{Statement	396	612},
+qw{Tabloid	792	1224},
+qw{Ledger	1224	792},
+qw{Folio	612	936},
+qw{Quarto	610	780},
+qw{7x9		504	648},
+qw{9x11		648	792},
+qw{9x12		648	864},
+qw{10x13	720	936},
+qw{10x14	720	1008},
+qw{Executive	540	720},
+
+qw{ISOB0	2835	4008},
+qw{ISOB1	2004	2835},
+qw{ISOB2	1417	2004},
+qw{ISOB3	1001	1417},
+qw{ISOB4	 709	1001},
+qw{ISOB5	 499	 709},
+qw{ISOB6	 354	 499},
+qw{ISOB7	 249	 354},
+qw{ISOB8	 176	 249},
+qw{ISOB9	 125	 176},
+qw{ISOB10	 88	 125},
+qw{jisb0	2916	4128},
+qw{jisb1	2064	2916},
+qw{jisb2	1458	2064},
+qw{jisb3	1032	1458},
+qw{jisb4	 729	1032},
+qw{jisb5	 516	 729},
+qw{jisb6	 363	 516},
+
+qw{C7		230	323},
+qw{DL		312	624},
+
+qw{a3		842	1190},	# defined by Adobe
+qw{a4		595	842},	# defined by Adobe; must precede a4small
+
+# a4small should be a4 with an ImagingBBox of [25 25 570 817].},
+qw{a4small	595	842},
+qw{letter	612	792},	# must precede lettersmall
+# lettersmall should be letter with an ImagingBBox of [25 25 587 767].
+qw{lettersmall	612	792},
+# note should be letter (or some other size) with the ImagingBBox
+# shrunk by 25 units on all 4 sides.
+qw{note		612	792},
+qw{letterLand	792	612},
+# End of Adobe-defined page sizes
+
+qw{a0		2380	3368},
+qw{a1		1684	2380},
+qw{a2		1190	1684},
+qw{a5		421	595},
+qw{a6		297	421},
+qw{a7		210	297},
+qw{a8		148	210},
+qw{a9		105	148},
+qw{a10		74	105},
+qw{b0		2836	4008},
+qw{b1		2004	2836},
+qw{b2		1418	2004},
+qw{b3		1002	1418},
+qw{b4		709	1002},
+qw{b5		501	709}, # defined by Adobe
+
+qw{a0Land	3368	2380},
+qw{a1Land	2380	1684},
+qw{a2Land	1684	1190},
+qw{a3Land	1190	842},
+qw{a4Land	842	595},
+qw{a5Land	595	421},
+qw{a6Land	421	297},
+qw{a7Land	297	210},
+qw{a8Land	210	148},
+qw{a9Land	148	105},
+qw{a10Land	105	74},
+qw{b0Land	4008	2836},
+qw{b1Land	2836	2004},
+qw{b2Land	2004	1418},
+qw{b3Land	1418	1002},
+qw{b4Land	1002	709},
+qw{b5Land	709	501},
+
+qw{c0		2600	3677},
+qw{c1		1837	2600},
+qw{c2		1298	1837},
+qw{c3		918	1298},
+qw{c4		649	918},
+qw{c5		459	649},
+qw{c6		323	459},
+
+# vvv U.S. CAD standard paper sizes
+qw{archE	2592	3456},
+qw{archD	1728	2592},
+qw{archC	1296	1728},
+qw{archB	864	1296},
+qw{archA	648	864},
+
+qw{flsa		612	936},	# U.S. foolscap
+qw{flse		612	936},	# European foolscap
+qw{halfletter	396	612},
+qw{csheet	1224	1584},	# ANSI C 17x22
+qw{dsheet	1584	2448},	# ANSI D 22x34
+qw{esheet	2448	3168},	# ANSI E 34x44
+qw{17x22	1224	1584},	# ANSI C 17x22
+qw{22x34	1584	2448},	# ANSI D 22x34
+qw{34x44	2448	3168},	# ANSI E 34x44
+);
+
+#** Converts a numeric paper size to a well-defined paper name. Tolerance is
+#** 8.5bp
+#** @param $_[0] width, in bp
+#** @param $_[1] height, in bp
+#** @return () or ("papername", ret.paper.width.bp, ret.paper.height.bp)
+sub valid_bp($$;$$) {
+  no integer;
+  my ($W1,$H1)=(defined$_[2]?$_[2]:0,defined$_[3]?$_[3]:0);
+  my ($WW,$HH)=(Htex::dimen::dimen2bp($_[0])-$W1, Htex::dimen::dimen2bp($_[1])-$H1);
+  # Dat: 1mm == 720/254bp; 3mm =~ 8.5bp
+  no integer;
+  for (my $I=0; $I<@papers; $I+=3) {
+    return @papers[$I,$I+1,$I+2] if abs($papers[$I+1]-$WW)<=8.5 and abs($papers[$I+2]-$HH)<=8.5;
+  }
+  ()
+}
+
+#** @param $_[0] (width width_unit "," height height_unit)
+#** @return () or ("papername", width.bp, height.bp)
+sub valid($) { # valid_papersize
+  my $S=lc$_[0];
+  $S=~/^\s*(\d+(\.\d+)?)\s*([a-z][a-z0-9]+)\s*,\s*(\d+(\.\d+)?)\s*([a-z][a-z0-9]+)\s*\Z(?!\n)/ ?
+    valid_bp("$1$3","$4$6") : ();
+}
+
+#** @param $_[0] (width width_unit? ("," || "x") height height_unit?) || (papername)
+#** @return () or ("papername"?, width.bp, height.bp)
+sub any($) {
+  my $S=lc$_[0];
+  if ($S=~/\A[a-z]\w+\Z(?!\n)/) {
+    for (my $I=0; $I<@papers; $I+=3) {
+      return @papers[$I,$I+1,$I+2] if lc($papers[$I]) eq $S;
+    }
+  }
+  return () if $S!~/^\s*(\d+(\.\d+)?)\s*((?:[a-z][a-z0-9]+)?)\s*[,x]\s*(\d+(\.\d+)?)\s*((?:[a-z][a-z0-9]+)?)\s*\Z(?!\n)/;
+  my($w,$h)=($1.$3, $4.$6);
+  my @L=valid_bp($w,$h);
+  @L ? @L : (undef,Htex::dimen::dimen2bp($w),Htex::dimen::dimen2bp($h))
 }
 
 just::end}
