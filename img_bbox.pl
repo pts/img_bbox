@@ -313,6 +313,73 @@ sub calc($) {
     $bbi->{SubFormat}=$1;
     $bbi->{ColorSpace}='Indexed';
     ($dummy,$bbi->{URX},$bbi->{URY})=unpack("A6vv",$head);
+  } elsif ($head=~/\AAT&TFORM....DJV[UIM]/) {
+    # Dat: report the dimensions of the 1st page only
+    # Dat: the number of pages can be retrived from the DIRM chunk, but its
+    #      data is BZZ-encoded :-( (compressed)
+    # Imp: IW44 etc. in djvulibre*/tools/djvuextract.cpp
+    $bbi->{FileFormat}='DjVu';
+    goto IOerr if !seek $F, length($1)-length($head), 1;
+    my $form12;
+    goto IOerr if 16!=read($F,$form12,16);
+    my($dummya,$lena,$typea)=unpack("A8NA4",$form12);
+    goto SYerr if $lena<=0; # Dat: should be unsinged 32-bit
+    # Dat: for $typea eq'DJVU' $typeb: 'INFO' and 'Sjbz'
+    # Dat: for $typea eq'DJVM' $typeb: 'DIRM' and 'FORM'; in 'FORM': 'DJVI'
+    ##print "main type $typea, len $lena\n";
+    $lena+=12; # Dat: filesize
+    my $ofs=16;
+    my @stack;
+    while (1) {
+      while ($ofs<$lena) {
+	if (($ofs&1)!=0) {
+	  goto SYerr if (1!=read($F,$form12,1) or $form12 ne"\0");
+	  $ofs++;
+	}
+	goto SYerr if 8!=read($F,$form12,8);
+	my($typeb,$lenb)=unpack("A4N",$form12);
+	##print "$typeb lenb=$lenb at $ofs\n";
+	$ofs+=8;
+	if ($typeb eq "INFO") {
+	  got SYerr if 5>$lenb or 5!=read($F,$form12,5);
+	  $ofs+=5; $lenb-=5;
+	  ($bbi->{URX},$bbi->{URY},$bbi->{"Info.version"})=unpack("nnc",$form12);
+	  @stack=(); last
+	} elsif ($typeb eq "FORM" and ($typea eq"DJVM" or $typea eq"DJVI")) {
+	  # Dat: descend into 1st page
+	  push @stack, $lena;
+	  push @stack, $ofs+$lenb;
+	  goto SYerr if 4!=read($F,$typea,4);
+	  $lena=$ofs+$lenb;
+	  $ofs+=4;
+	  ##print "new typea=$typea ofs=$ofs lena=$lena\n";
+	  next
+	}
+        #$lenb-=8;
+        $ofs+=$lenb;
+        goto SYerr if !seek($F,$ofs,0);
+        #die 42;
+      }
+      last if !@stack;
+      $ofs=pop@stack;
+      $lena=pop@stack;
+      goto SYerr if !seek($F,$ofs,0);
+    }
+    ##print "stop $ofs !< $lena\n";
+  } elsif (substr($head,0,4)eq"\0MRM") { # Dat: untested
+    # Minolta Dimage camera raw image
+    # http://www.dalibor.cz/minolta/raw_file_format.htm
+    $bbi->{FileFormat}='MinoltaRAW';
+    my $dummy;
+    goto SYerr if 32>length$head;
+    ($bbi->{"Info.version"},$dummy,$bbi->{URY},$bbi->{URX})=unpack("A8A4nn",substr($head,16));
+  } elsif (substr($head,0,4)eq"\x80\x2a\x7e\x0d") { # Dat: untested
+    $bbi->{FileFormat}='Cineon';
+    goto SYerr if 208>length$head;
+    ($bbi->{URS},$bbi->{URY})=unpack("NN",substr($head,200));
+  } elsif (substr($head,43,2)eq"\x39\x30") { # Dat: untested
+    $bbi->{FileFormat}='BioRad';
+    ($bbi->{URX},$bbi->{URY},$bbi->{'Info.num_pages'})=unpack("nnn",$head);
   } elsif ($head=~/\A(\377+\330)\377/) {
     $bbi->{FileFormat}='JPEG';
     die if !seek $F, length($1)-length($head), 1;
