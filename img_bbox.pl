@@ -515,6 +515,9 @@ sub calc($) {
         $bbi->{'Info.binary'}='Clean7Bit' if $dummy eq 'clean7bit';
         $bbi->{'Info.binary'}='Clean8Bit' if $dummy eq 'clean8bit';
         $bbi->{'Info.binary'}='Binary' if $dummy eq 'binary';
+      } elsif ($dummy eq 'creator' and $val=~/\bMetaPost\b/) {
+        $bbi->{FileFormat}='EPS';
+        $bbi->{SubFormat}='MPS'; # useful for graphicP.sty
       } elsif ($dummy eq 'boundingbox' and $val=~/\A([+-]?\d+)\s+([+-]?\d+)\s+([+-]?\d+)\s+([+-]?\d+)\Z(?!\n)/) {
         ($bbi->{LLX},$bbi->{LLY},$bbi->{URX},$bbi->{URY})=($1+0,$2+0,$3+0,$4+0) if !$had_hires;
       } elsif (($dummy eq 'hiresboundingbox' or $dummy eq 'exactboundingbox')
