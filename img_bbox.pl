@@ -29,33 +29,41 @@ eval '(exit $?0)' && eval 'PERL_BADLANG=x;PATH="$PATH:.";export PERL_BADLANG\
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU General Public License for more details.
 #
-# Extracting the image size is not supported for: other IFF, FIG.
-#
-# Dat: we know most of xloadimage-1.16, most of of file(1)-debian-potato,
-#   all of sam2p-0.40, all of xv-3.10
-# Dat: only in xloadimage: g3Ident,        g3Load,        "G3 FAX Image", (hard to identify file format)
-# Dat: only in xloadimage: macIdent,       macLoad,       "MacPaint Image", (stupid, black-white)
-# Imp: multiple paper sizes
-#
-use integer; # important
-use strict; # not so important
-# use Data::Dumper;
 
-# Dat: BBoxInfo is a hashref:
-# Dat: Info.* keys has FileFormat-dependent meaning (thus Info.depth may have
-#      different meanings for different FileFormats)
-# { 'FileFormat' => 'TIFF' # ...
-#   'SubFormat' => 'PPM'
-#   'Error' => 0
-#   'LLX' => ... # lower left x (usually 0)
-#   'LLY' => ... # lower left y (usually 0)
-#   'URX' => ... # upper right x (usually width)
-#   'URY' => ... # upper right y (usually height)
-# }
+package just; BEGIN{$INC{'just.pm'}='just.pm'}
+BEGIN{ $just::VERSION=2 }
+sub end(){1}
+sub main(){}
 
-# Dat: \usepackage[hiresbb]{graphicx}
-# Dat: pdfTeX graphicx.sty doesn't respect PDF CropBox. For
-#      /MediaBox[a b c d], \ht=d, \wd=c, and no overwrite below (a,b)
+BEGIN{$ INC{'integer.pm'}='integer.pm'} {
+package integer;
+use just;
+# by pts@fazekas.hu at Wed Jan 10 12:42:08 CET 2001
+sub import   { $^H |= 1 }
+sub unimport { $^H &= ~1 }
+just::end}
+
+BEGIN{$ INC{'strict.pm'}='strict.pm'} {
+package strict;
+use just;
+# by pts@fazekas.hu at Wed Jan 10 12:42:08 CET 2001
+require 5.002;
+sub bits {
+  (grep{'refs'eq$_}@_ && 2)|
+  (grep{'subs'eq$_}@_ && 0x200)|
+  (grep{'vars'eq$_}@_ && 0x400)|
+  ($@ || 0x602)
+}
+sub import { shift; $^H |= bits @_ }
+sub unimport { shift; $^H &= ~ bits @_ }
+just::end}
+
+BEGIN{$ INC{'Pts/string.pm'}='Pts/string.pm'} {
+package Pts::string;
+# by pts@fazekas.hu at Sat Dec 21 21:32:18 CET 2002
+use just;
+use integer;
+use strict;
 
 #** @param $_[0] a string
 #** @param $_[1] index of first bit to return. Bit 128 of byte 0 is index 0.
@@ -103,6 +111,23 @@ sub c_intval($) {
   undef
 }
 
+sub import {
+  no strict 'refs';
+  my $package = (caller())[0];
+  shift; # my package
+  for my $p (@_ ? @_ : qw{get_bits_msb c_floatval c_numval c_intval}) { *{$package."::$p"}=\&{$p} }
+}
+
+just::end}
+
+BEGIN{$ INC{'Htex/dimen.pm'}='Htex/dimen.pm'} {
+package Htex::dimen;
+# by pts@fazekas.hu at Sat Dec 21 21:26:15 CET 2002
+use just;
+use integer;
+use strict;
+use Pts::string qw(c_numval);
+
 my %bp_mul;
 { no integer; %bp_mul=(
   'bp'=>1, # 1 bp = 1 bp (big point)
@@ -129,327 +154,51 @@ sub dimen2bp($) {
   $val
 }
 
-# --- PDF helpers
+just::end}
 
-#** @param $_[0] an arbirary binary string
-#** @param $_[1] string containing [^\w.-] chars as octal
-#sub pdf_safe_string($) {
-#  my $S=$_[0];
-#  $S=~s@([^A-Za-z0-9_.-])@sprintf"\\%03o",ord$1@ge;
-#  $S
-#}
+BEGIN{$ INC{'Htex/ImgBBox.pm'}='Htex/ImgBBox.pm'} {
+package Htex::ImgBBox;
+#
+# ImgBBox -- detect file format and media parameters
+# by pts@fazekas.hu at Sat Dec  7 21:31:01 CET 2002
+# JustLib2 at Sat Dec 21 21:29:21 CET 2002
+#
+# Dat: we know most of xloadimage-1.16, most of of file(1)-debian-potato,
+#   all of sam2p-0.40, all of xv-3.10
+# Dat: only in xloadimage: g3Ident,        g3Load,        "G3 FAX Image", (hard to identify file format)
+# Dat: only in xloadimage: macIdent,       macLoad,       "MacPaint Image", (stupid, black-white)
+# Imp: multiple paper sizes
+#
+use just;
+use integer;
+use strict;
+use Htex::PDFread;
+use Htex::dimen;
+use Pts::string;
+# use Data::Dumper;
 
-my @pdf_classify;
-#** @param $_[0] a string in PDF source format
-#** @return a rewritten string, or "" if $_[0] is truncated, or undef if
-#**   there is a parse error
-sub pdf_rewrite($;$) {
-  my $explicit_term_p=$_[1];
-  my $L=length($_[0]);
-  return "" if $L==0;
-  my $S="$_[0]\n>>  "; # add sentinel
-  my $I=0;
-  my $O;
-  my $RET="";
-  if (!@pdf_classify) {
-    # Dat: PDF whitespace(0) is  [\000\011\012\014\015\040]
-    # Dat: PDF separators(10) are < > { } [ ] ( ) / %
-    # Dat: PDF regular(40) character is any of [\000-\377] which is not whitespace or separator
-    @pdf_classify=(40)x256;
-    @pdf_classify[ord('<'),ord('>'),ord('{'),ord('}'),ord('['),ord(']'),
-      ord('('),ord(')'),ord('/'),ord('%')]=(10,11,12,13,14,15,16,17,18,19);
-    @pdf_classify[000,011,012,014,015,040]=(0,0,0,0,0,0);
-  }
-  while ($I<$L) {
-    $O=$pdf_classify[vec($S,$I,8)];
-    if ($O==0) { # whitespace
-    } elsif (12<=$O and $O<=15) { # one-char token
-      $RET.=" ".substr($S,$I,1);
-    } elsif ($O==18 or $O==40) { # name or /name
-      my $P=0;
-      if ($O==18) { $I++; $RET.=" /" } else { $RET.=" "; $P=1 }
-      my $T="";
-      $T.=chr($O) while $pdf_classify[$O=vec($S,$I++,8)]==40;
-      $I--;
-      ## die $I;
-      $T=~s@([^A-Za-z0-9_.-])@sprintf"#%02x",ord$1@ge; # make name safe
-      $RET.=$T;
-      return $RET if $P and ($T eq "stream" or $T eq "endobj" or $T eq "startxref");
-      next
-    } elsif ($O==11) { # `>'
-      return "" if ++$I==$L; # only `>' has arrived
-      return undef if vec($S,$I,8)!=62; # err(">> expected");
-      $RET.=" >>";
-    } elsif ($O==16) { # string
-      my $T="";
-      my $depth=1; $I++;
-      while ($I<$L) {
-        $O=vec($S,$I++,8); bcont:
-        ## print chr($O),":$depth\n";
-        if ($O==40) { $depth++ }
-        elsif ($O==41) { last unless --$depth }
-        elsif ($O==92) { # a backslash
-          $O=vec($S,$I++,8);
-          if (48<=$O && $O<=55) {
-            my $P=$O-48; $O=vec($S,$I++,8);
-            if (48<=$O && $O<=55) {
-              my $Q=$O-48; $O=vec($S,$I++,8);
-              if (48<=$O && $O<=55) { $T.=chr(255&($P<<6|$Q<<3|($O-48))) }
-                               else { $T.=chr($P<<3|$Q); goto bcont }
-            } else { $T.=chr($P); goto bcont }
-          } elsif ($O==110) { $O=10 }
-          elsif ($O==114) { $O=13 }
-          elsif ($O==116) { $O=9 }
-          elsif ($O== 98) { $O=8 }
-          elsif ($O==102) { $O=12 }
-        }
-        $T.=chr($O)
-      } # WHILE
-      return "" if $depth; # err("unterminated string")
-      $T=~s@([^A-Za-z0-9_.-])@sprintf"\\%03o",ord$1@ge; # make string safe
-      $RET.=" ($T)"; next
-    } elsif ($O==10) { # hex string
-      $O=vec($S,++$I,8);
-      if ($O==60) { $RET.=" <<"; $I++; next }
-      # parse hexadecimal string
-      my $half=0x100;
-      my $T="";
-      while (1) {
-        1 until $pdf_classify[$O=vec($S,$I++,8)]; # skip whitespace
-        if ($O==62) { $T.=chr($half&0xFF) if $half&0x1000; last } # '>'
-        return undef if $pdf_classify[$O]!=40; # err("unexpected token in hex")
-        if (65<=$O and $O<=70) { $half+=$O-55 }
-        elsif (97<=$O and $O<=102) { $half+=$O-87 }
-        elsif (48<=$O and $O<=57) { $half+=$O-48 }
-        else { return undef } # err("illegal hex digit")
-        if ($half&0x1000) { $T.=chr($half&0xFF); $half=0x100 }
-                     else { $half<<=4 }
-      }
-      $T=~s@([^A-Za-z0-9_.-])@sprintf"\\%03o",ord$1@ge; # make string safe
-      $RET.=" ($T)"; next
-    } elsif ($O==19) { # single-line comment
-      $I++ while ($O=vec($S,$I,8))!=13 && $O!=10;
-      ## print STDERR "I=$I L=$L\n";
-      next
-    } else { return undef } # err("token expected") # $O==11, $O==17
-    $I++
-  } ## WHILE
-  ## print STDERR "XI=$I L=$L\n";
-  # die $explicit_term_p;
-  return "" if $explicit_term_p;
-  ($I>$L) ? "" : $RET
-}
+# Dat: BBoxInfo is a hashref:
+# Dat: Info.* keys has FileFormat-dependent meaning (thus Info.depth may have
+#      different meanings for different FileFormats)
+# { 'FileFormat' => 'TIFF' # ...
+#   'SubFormat' => 'PPM'
+#   'Error' => 0
+#   'LLX' => ... # lower left x (usually 0)
+#   'LLY' => ... # lower left y (usually 0)
+#   'URX' => ... # upper right x (usually width)
+#   'URY' => ... # upper right y (usually height)
+# }
 
-# Unit test:
-#die unless pdf_rewrite("hello \n\t world\n\t") eq " hello world";
-#die unless pdf_rewrite('(hel\)lo\n\bw(or)ld)') eq ' (hel\051lo\012\010w\050or\051ld)';
-#die unless pdf_rewrite('(hel\)lo\n\bw(orld)') eq '';
-#die unless pdf_rewrite('[ (hel\)lo\n\bw(or)ld)>>') eq ' [ (hel\051lo\012\010w\050or\051ld) >>';
-#die unless pdf_rewrite('>') eq "";
-#die unless pdf_rewrite('<') eq "";
-#die unless pdf_rewrite('< ') eq "";
-#die unless !defined pdf_rewrite('< <');
-#die unless !defined pdf_rewrite('> >');
-#die unless pdf_rewrite('[ (hel\)lo\n\bw(or)ld) <') eq "";
-#die unless pdf_rewrite("<\n3\t1\r4f5C5 >]") eq ' (1O\134P) ]';
-#die unless pdf_rewrite("<\n3\t1\r4f5C5") eq "";
-#die unless !defined pdf_rewrite("<\n3\t1\r4f5C5]>");
-#die unless pdf_rewrite("% he te\n<\n3\t1\r4f5C5 >]endobj<<") eq ' (1O\134P) ] endobj';
-#die unless pdf_rewrite("") eq "";
-#die unless pdf_rewrite("<<") eq " <<";
-#die unless pdf_rewrite('%hello') eq '';
-#die unless pdf_rewrite("alma\n%korte\n42") eq ' alma 42';
-#die unless pdf_rewrite('/Size 42') eq ' /Size 42';
-#die "OK";
-
-#** Reads a single PDF indirect object (without its stream) from a PDF file.
-#** Does some trivial transformations on it to make later regexp matching
-#** easier. Stops at `stream', `endobj' and `startxref'.
-#** @param $_[0] a filehandle (e.g \*STDIN), correctly positioned in the PDF
-#**   file to the beginning of the object data (i.e just before `5 0 obj')
-#** @return string containing PDF source code, or undef on error
-sub pdf_read_obj($) {
-  my $F=$_[0];  my $L=1024;  my $M;  my $S="";  my $RET;
-  while (1) { # read as much data as necessary
-    return undef if 0>($M=read $F, $S, $L, length($S));
-    $RET=pdf_rewrite($S,1);
-    ## print "($S)\n";
-    return undef if !defined $RET; # parse error
-    return $RET if length $RET; # OK, found object
-    return undef if $M==0; # cannot read more, reached EOF
-    $L<<=1;
-  }
-  #$S=~m@[\000\011\012\014\015\040]*(
-  #  %[^\r\n]*[\r\n]|
-  #  /?[^\000\011\012\014\015\040<>{}\[\]()/%]*(?=[\000\011\012\014\015\040<>{}\[\]()/%])| # unterminated
-  #  <<|>>|\{|}|\[|]|
-  #  <[a-fA-F0-9\000\011\012\014\015\040]*>| # hex string
-  #  \((?:[^\\()]+|\\[\000-\377])*\)| # literal string, the easy way
-  #  \( # an unfinished string, needs special care
-  #)@gx
-}
-
-#** @param $_[0] a filehandle (e.g \*STDIN), containing a PDF file, positioned
-#**  just before an `xref' table
-#** @param $_[1] an xref table: $_[1][4][56] is the file offset of object 56
-#**   from generation 4; will be extended
-#** @return the `trailer' section after the `xref'; or undef
-sub pdf_read_xref($$) {
-  # made much faster at Wed Dec 18 09:50:23 CET 2002
-  my $T;
-  my $E;
-  my $F=$_[0];
-  my $XREF=$_[1];
-  return undef if 8>read $F, $T, 1024;
-  return undef unless $T=~s@\A\s*xref\s+(\d+)\s+(\d+)\s+(?=\S)@@;
-  my ($first,$len,$flen);
-  while (1) {
-    ($first,$len)=($1+0,$2+0);
-    ## print " $first + $len\n";
-    $flen=($len*=20)-length($T)+20;
-    return undef unless $flen<1 or $flen==read $F, $T, $flen, length($T);
-    for (my $I=0;$I<$len;$I+=20, $first++) {
-      $E=substr($T, $I, 20);
-      return undef unless $E=~/\A(\d{10})\s(\d{5})\s([nf])\s\s/;
-      ## print "($1 $2 $3)\n";
-      $XREF->[$2+0][$first]=$1+0 if $3 eq 'n';
-    }
-    $E=substr($T, $len);
-    last if $E!~s@\A\s*(\d+)\s*(\d+)\s+(?=\S)@@; # next section
-    $T=$E;
-  }
-  
-  # die(-length($T)+$len);
-  ## die tell($F);
-  return undef if length($T)!=$len and !seek $F, -length($T)+$len, 1;
-  ## die tell($F);
-  return undef unless defined($T=pdf_read_obj($F));
-  $XREF->[0][0]=undef if defined $XREF->[0];
-  $XREF->[0][0]=$1+0 if $T=~m@ /Prev (\d+)@; # remember /Prev xref table
-  return undef unless $T=~m@\A trailer( .*) startxref\Z(?!\n)@s;
-  $1
-}
-
-my $pdf_last_ref0=0;
-#** @param $_[0] a filehandle (e.g \*STDIN), containing a PDF file
-#** @param $_[1] an xref table: $_[1][4][56] is the file offset of object 56
-#**   from generation 4
-#** @param $_[2] an object number
-#** @param $_[3] a generation number
-#** @return PDF source code of the reference, or undef
-sub pdf_ref($$$$) {
-  my $F=$_[0]; my $XREF=$_[1]; my $ON=$_[2]+0; my $GN=$_[3]+0;
-  my $T;
-  $pdf_last_ref0=$ON if $GN==0;
-  ## print "REF $ON $GN;\n";
-  until (ref $XREF->[$GN] and defined ($T=$XREF->[$GN][$ON])) {
-    return undef if !ref $XREF->[0] or !defined $XREF->[0][0]; # no /Prev entry, `$ON $GN R' not found
-    return undef unless seek $F, $XREF->[0][0], 0;
-    return undef if !defined pdf_read_xref($F,$XREF);
-  }
-  ## print "REF at $T;\n";
-  return undef unless seek $F, $T, 0;
-  return undef unless defined($T=pdf_read_obj($F));
-  ## print "REF=($T);\n";
-  return undef unless $T=~s@\A (\d+) (\d+) obj\b(.*) (endobj|stream)\Z(?!\n)@$3@s;
-  $T
-}
-
-#** Gets a key from a direct dict, and resolves it if it is an indirect object
-#** @param $_[0] a filehandle (e.g \*STDIN), containing a PDF file
-#** @param $_[1] an xref table: $_[1][4][56] is the file offset of object 56
-#**   from generation 4
-#** @param $_[2] a PDF source dict (`<< ... >>') or array
-#** @param $_[3] a key (`/...')
-sub pdf_get($$$$) {
-  my $F=$_[0]; my $XREF=$_[1]; my $S=$_[2]; my $KEY=$_[3]; my $POS=0;
-  my $DEPTH=0; my $IS_DICT; my $C=0; my $N=0;
-  ## print "\n";
-  while ($S=~/\G (\S+)/g) {
-    $C=vec($1,0,8);  $POS=pos($S);
-    ## print "($1) $DEPTH $N\n";
-    if ($1 eq '>>' or $1 eq ']') {
-      return undef if 0==$DEPTH--;
-      last if !$DEPTH;
-      $N++ if 1==$DEPTH;
-    }
-    elsif ($DEPTH==1 and !$IS_DICT and $KEY==$N) { $POS=pos($S)-=length($1)+1; goto do_ret }
-    elsif ($1 eq '<<') { $IS_DICT=1 if 0==$DEPTH++ }
-    elsif ($1 eq '[') {
-      if (0==$DEPTH++) {
-        $IS_DICT=0;
-        return undef if $KEY!~/\A(\d+)\Z(?!\n)/; # err("non-numeric key in array")
-      }
-    }
-    elsif (0==$DEPTH) { return undef } # not in a composite object
-    elsif (1!=$DEPTH) { next }
-    elsif (!$IS_DICT) { $N++ }
-    elsif ($C==40) { $N++ } # `(': string or bare name
-    elsif ($C>=47 and $C<=57) { # '/': /name 0..9: number
-      ## print "TRY ($1) KEY=$KEY.\n";
-      next if ($N++&1)==1 or $1 ne $KEY;
-     do_ret:
-      ## print substr($S,pos($S)),";;\n";
-      return pdf_ref $F, $XREF, $1, $2 if $S=~/\G (\d+) (\d+) R\b/gc;
-      ## print substr($S,pos($S)),"::\n";
-      $DEPTH=0;
-      while ($S=~/\G( \S+)/g) {
-        if ($1 eq ' <<' or $1 eq ' [') { $DEPTH++ }
-        elsif ($1 eq ' >>' or $1 eq ' ]') {
-          ## die "($1)\n";
-          return undef if 0==$DEPTH--; # err("nesting")
-          return substr($S,$POS,pos($S)-$POS) if 0==$DEPTH;
-        } elsif ($DEPTH==0) { return $1 }
-      }
-    } else { $N++ } # bare name
-  }
-  return undef if $POS!=length($S); # err("invalid source dict");
-  "" # not found
-}
-
-# Unit test:
-#die unless pdf_get(\*STDIN, 0, ' [ al makorte 42 ]', 0) eq ' al';
-#die unless pdf_get(\*STDIN, 0, ' [ al makorte 42 ]', 1) eq ' makorte';
-#die unless pdf_get(\*STDIN, 0, ' [ al makorte 42 ]', 2) eq ' 42';
-#die unless pdf_get(\*STDIN, 0, ' [ al makorte 42 ]', 3) eq '';
-#die unless pdf_get(\*STDIN, 0, ' [ << >> ]', 0) eq ' << >>';
-#die unless pdf_get(\*STDIN, 0, ' [ << >> ]', 1) eq '';
-#die unless pdf_get(\*STDIN, 0, ' [ << >> [ al makorte 42 ] ]', 1) eq ' [ al makorte 42 ]';
-#die unless pdf_get(\*STDIN, 0, ' << /Alma [ 1 2 ] /Korte [ 3 4 ] >>', '/Korte') eq ' [ 3 4 ]';
-#die unless !defined pdf_get(\*STDIN, 0, ' [ al makorte 42 ]', '/Name');
-#die unless !defined pdf_get(\*STDIN, 0, ' << al makorte 42 >>', 42);
-#die unless pdf_get(\*STDIN, 0, ' << al makorte 42 137 >>', 42) eq ' 137';
-#die unless pdf_get(\*STDIN, 0, ' << al makorte >>', 'al') eq "";
-#die "OK";
-
-#** Reported boxes: /MediaBox /CropBox /BleedBox /TrimBox /ArtBox
-#** @param $_[0] a filehandle (e.g \*STDIN), containing a PDF file
-#** @param $_[1] an xref table: $_[1][4][56] is the file offset of object 56
-#**   from generation 4
-#** @param $_[2] a PDF source dict (`<< ... >>') of /Type/Catalog
-#**   /Type/Pages or /Type/Page
-#** @param $_[3] hashref to update. $_[3]{BleedBox}[2] will be the URX corner
-#**   of the BleedBox
-sub pdf_get_boxes($$$$) {
-  my $F=$_[0]; my $XREF=$_[1]; my $S=$_[2]; my $bbi=$_[3];
-  return if !defined $S;
-  for my $name (qw{MediaBox CropBox BleedBox TrimBox ArtBox}) {
-    my $box=pdf_get($F, $XREF, $S, "/$name");
-    next if !defined $box or !length $box
-         or $box!~m@ \[ ([0-9eE.-]+) ([0-9eE.-]+) ([0-9eE.-]+) ([0-9eE.-]+) \]\Z(?!\n)@
-         or !defined c_numval($1) or !defined c_numval($2) or !defined c_numval($3) or !defined c_numval($4);
-    ($bbi->{LLX},$bbi->{LLY},$bbi->{URX},$bbi->{URY})=($1+0,$2+0,$3+0,$4+0) if $name eq 'MediaBox';
-    my $name2="Info.$name";
-    ($bbi->{$name2}[0],$bbi->{$name2}[1],$bbi->{$name2}[2],$bbi->{$name2}[3])=($1+0,$2+0,$3+0,$4+0);
-  }
-}
+# Dat: \usepackage[hiresbb]{graphicx}
+# Dat: pdfTeX graphicx.sty doesn't respect PDF CropBox. For
+#      /MediaBox[a b c d], \ht=d, \wd=c, and no overwrite below (a,b)
 
 # ---
 
 #** May moves the file offset, but only relatively (SEEK_CUR).
 #** @param $_[0] \*FILE
 #** @return BBoxInfo
-sub img_bbox($) {
+sub calc($) {
   my $F=$_[0];
   my $dummy;
   my @L;
@@ -684,7 +433,7 @@ sub img_bbox($) {
       }
       goto SYerr if $type ne ' /Page';
       # Dat: cannot set $page1obj properly here, because it might be a direct object
-      $bbi->{'Info.page1obj'}=$pdf_last_ref0;
+      $bbi->{'Info.page1obj'}=$Htex::PDFread::pdf_last_ref0;
     } else {
       # die $page1obj;
       $pages=pdf_ref($F, $xref, $page1obj, 0);
@@ -804,8 +553,8 @@ sub img_bbox($) {
             $bbi->{"Val.$L[0]"}=$L[1];
             if ($L[0] eq 'papersize') {
               @L=split /,/, $L[1], 2;
-              $bbi->{URX}=dimen2bp($L[0]);
-              $bbi->{URY}=dimen2bp($L[1]);
+              $bbi->{URX}=Htex::dimen::dimen2bp($L[0]);
+              $bbi->{URY}=Htex::dimen::dimen2bp($L[1]);
               if (!defined $bbi->{URX} or !defined $bbi->{URY}) {
                 delete $bbi->{URX}; delete $bbi->{URY};
               }
@@ -1189,100 +938,551 @@ sub img_bbox($) {
   $bbi
 }
 
-# ---
-
-# my $filename="examples/xman.xpm";
-# my $filename="/home/guests/pts/prg/pshack/jpeg2pdf/sam2p-0.39/examples/pts2.pbm";
-# my $filename="/home/guests/pts/prg/pshack/jpeg2pdf/sam2p-0.39/examples/sziget_al.ppm";
-# my $filename="/home/guests/pts/prg/pshack/jpeg2pdf/sam2p-0.39/examples/ptsbanner.gif";
-# my $filename="/home/guests/pts/prg/pshack/jpeg2pdf/sam2p-0.39/examples/ptsbanner2.jpg";
-# my $filename="examples/firstrun.swf";
-# my $filename="examples/at-logo.lbm";
-# my $filename="examples/t.miff";
-# my $filename="examples/t.tga";
-# my $filename="/home/guests/pts/prg/pshack/jpeg2pdf/sam2p-0.39/examples/fusi.png";
-# my $filename="/home/guests/pts/prg/pshack/jpeg2pdf/sam2p-0.39/examples/mixing1.pcx";
-# my $filename="examples/t.xbm1";
-# my $filename="examples/uparrow.xbm";
-# my $filename="examples/uparrow.xbm";
-# my $filename="examples/ptsbanner.bmp";
-# my $filename="/home/guests/pts/prg/pshack/jpeg2pdf/sam2p-0.40/examples/fisht.tiff";
-# my $filename="/home/guests/pts/prg/pshack/jpeg2pdf/sam2p-0.40/examples/fusi.tiff";
-# my $filename="examples/chopok.dvi";
-# my $filename="examples/chopok.dvi";
-# my $filename="examples/a.jpg";
-# my $filename="examples/ptsbanner2a.jpg";
-# my $filename="examples/ptsbannerg.jpg";
-# my $filename="examples/13x7.xcf";
-# my $filename="examples/Far.ico";
-# my $filename="examples/boomlink.psd";
-# my $filename="examples/ptsbanner.xwd";
-# my $filename="examples/t.g3";
-# my $filename="examples/t.gz";
-# my $filename="examples/t.fits";
-# my $filename="examples/t.zip";
-# my $filename="examples/t.sgi";
-# my $filename="examples/test.ps";
-# my $filename="examples/test_atend.eps";
-# my $filename="examples/test.pdf";
-# my $filename="/tmp/PLRM.pdf";
-# my $filename="/tmp/PDFRef.pdf";
-# my $filename="/tmp/fsproto.pdf";
-# my $filename="examples/a-gth-1.pdf";
-# my $filename="examples/hello.pdf";
-# my $filename="/home/guests/pts/eg/bssz/szamelmszig_tetelsorA_kidolgozott.php.pdf";
-# my $filename="/home/guests/pts/eg/ele/elovizsga2001.pdf";
-# my $filename="/home/guests/pts/eg/th/lm2.pdf";
-# my $filename="/tmp/PLRM.pdf";
-
-my $opt_long_p=0;
-
-sub work(@) {
-  my $filename=$_[0];
-  die "$0: $filename: $!\n" unless open F, "< $filename";
-  ## print STDERR "$filename\n";
-  my $bbi=img_bbox(\*F);
-  if ($opt_long_p) {
-    ## print "$filename: ", Dumper($bbi);
-    print "$filename\n";
-    for my $key (sort keys %$bbi) {
-      print "  $key = ";
-      my $val=$bbi->{$key};
-      print( (ref($val)eq'ARRAY') ? "[ @$val ]\n" : "$val\n");
-    }
-  } else {
-    my $FileFormat=defined $bbi->{FileFormat} ? $bbi->{FileFormat} : "??";
-    my $LLX=defined $bbi->{LLX} ? $bbi->{LLX} : "??";
-    my $LLY=defined $bbi->{LLY} ? $bbi->{LLY} : "??";
-    my $URX=defined $bbi->{URX} ? $bbi->{URX} : "??";
-    my $URY=defined $bbi->{URY} ? $bbi->{URY} : "??";
-    my $Error=defined $bbi->{Error} ? " error:$bbi->{Error}" : "";
-    print "$filename $FileFormat $LLX $LLY $URX $URY$Error\n";
+sub import {
+  no strict 'refs';
+  my $package=(caller())[0];
+  shift;
+  for my $p (@_) {
+    else { *{$package."::$p"}=\&{$p} }
   }
 }
 
-die "This is img_bbox.pl by pts\@fazekas.hu
-Usage: $0 [--long] [--] <filename.image> [...]\n" if !@ARGV;
+just::end}
 
-if (@ARGV and $ARGV[0]eq'--long') { shift @ARGV; $opt_long_p=1 }
-if (@ARGV and $ARGV[0]eq'--') { shift @ARGV }
+BEGIN{$ INC{'vars.pm'}='vars.pm'} {
+package vars;
+use just;
+# by pts@fazekas.hu at Wed Jan 10 12:42:08 CET 2001
+require 5.002;
+sub import {
+  my $callpack = caller;
+  my ($sym, $ch, $sym0);
+  shift;
+  for $sym0 (@_) {
+    die("Can't declare another package's variables") if $sym0 =~ /::/;
+    ($ch, $sym) = unpack('a1a*', $sym0);
+    *{"${callpack}::$sym"} =
+    (  $ch eq "\$" ? \$   {"${callpack}::$sym"}
+     : $ch eq "\@" ? \@   {"${callpack}::$sym"}
+     : $ch eq "\%" ? \%   {"${callpack}::$sym"}
+     : $ch eq "\*" ? \*   {"${callpack}::$sym"}
+     : $ch eq "\&" ? \&   {"${callpack}::$sym"}
+     : die("'$ch$sym' is not a valid variable name\n")
+    );
+  }
+}
+just::end}
 
-#if (@ARGV) {
-for my $filename (@ARGV) { work $filename }
-# } else { work $filename }
+BEGIN{$ INC{'Htex/PDFread.pm'}='Htex/PDFread.pm'} {
+package Htex::PDFread;
+# by pts@fazekas.hu at Sat Dec 21 21:28:09 CET 2002
+use just;
+use integer;
+use strict;
+use Pts::string;
+use vars qw($pdf_last_ref0);
+
+my @pdf_classify;
+#** @param $_[0] a string in PDF source format
+#** @return a rewritten string, or "" if $_[0] is truncated, or undef if
+#**   there is a parse error
+sub pdf_rewrite($;$) {
+  my $explicit_term_p=$_[1];
+  my $L=length($_[0]);
+  return "" if $L==0;
+  my $S="$_[0]\n>>  "; # add sentinel
+  my $I=0;
+  my $O;
+  my $RET="";
+  if (!@pdf_classify) {
+    # Dat: PDF whitespace(0) is  [\000\011\012\014\015\040]
+    # Dat: PDF separators(10) are < > { } [ ] ( ) / %
+    # Dat: PDF regular(40) character is any of [\000-\377] which is not whitespace or separator
+    @pdf_classify=(40)x256;
+    @pdf_classify[ord('<'),ord('>'),ord('{'),ord('}'),ord('['),ord(']'),
+      ord('('),ord(')'),ord('/'),ord('%')]=(10,11,12,13,14,15,16,17,18,19);
+    @pdf_classify[000,011,012,014,015,040]=(0,0,0,0,0,0);
+  }
+  while ($I<$L) {
+    $O=$pdf_classify[vec($S,$I,8)];
+    if ($O==0) { # whitespace
+    } elsif (12<=$O and $O<=15) { # one-char token
+      $RET.=" ".substr($S,$I,1);
+    } elsif ($O==18 or $O==40) { # name or /name
+      my $P=0;
+      if ($O==18) { $I++; $RET.=" /" } else { $RET.=" "; $P=1 }
+      my $T="";
+      $T.=chr($O) while $pdf_classify[$O=vec($S,$I++,8)]==40;
+      $I--;
+      ## die $I;
+      $T=~s@([^A-Za-z0-9_.-])@sprintf"#%02x",ord$1@ge; # make name safe
+      $RET.=$T;
+      return $RET if $P and ($T eq "stream" or $T eq "endobj" or $T eq "startxref");
+      next
+    } elsif ($O==11) { # `>'
+      return "" if ++$I==$L; # only `>' has arrived
+      return undef if vec($S,$I,8)!=62; # err(">> expected");
+      $RET.=" >>";
+    } elsif ($O==16) { # string
+      my $T="";
+      my $depth=1; $I++;
+      while ($I<$L) {
+        $O=vec($S,$I++,8); bcont:
+        ## print chr($O),":$depth\n";
+        if ($O==40) { $depth++ }
+        elsif ($O==41) { last unless --$depth }
+        elsif ($O==92) { # a backslash
+          $O=vec($S,$I++,8);
+          if (48<=$O && $O<=55) {
+            my $P=$O-48; $O=vec($S,$I++,8);
+            if (48<=$O && $O<=55) {
+              my $Q=$O-48; $O=vec($S,$I++,8);
+              if (48<=$O && $O<=55) { $T.=chr(255&($P<<6|$Q<<3|($O-48))) }
+                               else { $T.=chr($P<<3|$Q); goto bcont }
+            } else { $T.=chr($P); goto bcont }
+          } elsif ($O==110) { $O=10 }
+          elsif ($O==114) { $O=13 }
+          elsif ($O==116) { $O=9 }
+          elsif ($O== 98) { $O=8 }
+          elsif ($O==102) { $O=12 }
+        }
+        $T.=chr($O)
+      } # WHILE
+      return "" if $depth; # err("unterminated string")
+      $T=~s@([^A-Za-z0-9_.-])@sprintf"\\%03o",ord$1@ge; # make string safe
+      $RET.=" ($T)"; next
+    } elsif ($O==10) { # hex string
+      $O=vec($S,++$I,8);
+      if ($O==60) { $RET.=" <<"; $I++; next }
+      # parse hexadecimal string
+      my $half=0x100;
+      my $T="";
+      while (1) {
+        1 until $pdf_classify[$O=vec($S,$I++,8)]; # skip whitespace
+        if ($O==62) { $T.=chr($half&0xFF) if $half&0x1000; last } # '>'
+        return undef if $pdf_classify[$O]!=40; # err("unexpected token in hex")
+        if (65<=$O and $O<=70) { $half+=$O-55 }
+        elsif (97<=$O and $O<=102) { $half+=$O-87 }
+        elsif (48<=$O and $O<=57) { $half+=$O-48 }
+        else { return undef } # err("illegal hex digit")
+        if ($half&0x1000) { $T.=chr($half&0xFF); $half=0x100 }
+                     else { $half<<=4 }
+      }
+      $T=~s@([^A-Za-z0-9_.-])@sprintf"\\%03o",ord$1@ge; # make string safe
+      $RET.=" ($T)"; next
+    } elsif ($O==19) { # single-line comment
+      $I++ while ($O=vec($S,$I,8))!=13 && $O!=10;
+      ## print STDERR "I=$I L=$L\n";
+      next
+    } else { return undef } # err("token expected") # $O==11, $O==17
+    $I++
+  } ## WHILE
+  ## print STDERR "XI=$I L=$L\n";
+  # die $explicit_term_p;
+  return "" if $explicit_term_p;
+  ($I>$L) ? "" : $RET
+}
+
+# Unit test:
+#die unless pdf_rewrite("hello \n\t world\n\t") eq " hello world";
+#die unless pdf_rewrite('(hel\)lo\n\bw(or)ld)') eq ' (hel\051lo\012\010w\050or\051ld)';
+#die unless pdf_rewrite('(hel\)lo\n\bw(orld)') eq '';
+#die unless pdf_rewrite('[ (hel\)lo\n\bw(or)ld)>>') eq ' [ (hel\051lo\012\010w\050or\051ld) >>';
+#die unless pdf_rewrite('>') eq "";
+#die unless pdf_rewrite('<') eq "";
+#die unless pdf_rewrite('< ') eq "";
+#die unless !defined pdf_rewrite('< <');
+#die unless !defined pdf_rewrite('> >');
+#die unless pdf_rewrite('[ (hel\)lo\n\bw(or)ld) <') eq "";
+#die unless pdf_rewrite("<\n3\t1\r4f5C5 >]") eq ' (1O\134P) ]';
+#die unless pdf_rewrite("<\n3\t1\r4f5C5") eq "";
+#die unless !defined pdf_rewrite("<\n3\t1\r4f5C5]>");
+#die unless pdf_rewrite("% he te\n<\n3\t1\r4f5C5 >]endobj<<") eq ' (1O\134P) ] endobj';
+#die unless pdf_rewrite("") eq "";
+#die unless pdf_rewrite("<<") eq " <<";
+#die unless pdf_rewrite('%hello') eq '';
+#die unless pdf_rewrite("alma\n%korte\n42") eq ' alma 42';
+#die unless pdf_rewrite('/Size 42') eq ' /Size 42';
+#die "OK";
+
+#** Reads a single PDF indirect object (without its stream) from a PDF file.
+#** Does some trivial transformations on it to make later regexp matching
+#** easier. Stops at `stream', `endobj' and `startxref'.
+#** @param $_[0] a filehandle (e.g \*STDIN), correctly positioned in the PDF
+#**   file to the beginning of the object data (i.e just before `5 0 obj')
+#** @return string containing PDF source code, or undef on error
+sub pdf_read_obj($) {
+  my $F=$_[0];  my $L=1024;  my $M;  my $S="";  my $RET;
+  while (1) { # read as much data as necessary
+    return undef if 0>($M=read $F, $S, $L, length($S));
+    $RET=pdf_rewrite($S,1);
+    ## print "($S)\n";
+    return undef if !defined $RET; # parse error
+    return $RET if length $RET; # OK, found object
+    return undef if $M==0; # cannot read more, reached EOF
+    $L<<=1;
+  }
+  #$S=~m@[\000\011\012\014\015\040]*(
+  #  %[^\r\n]*[\r\n]|
+  #  /?[^\000\011\012\014\015\040<>{}\[\]()/%]*(?=[\000\011\012\014\015\040<>{}\[\]()/%])| # unterminated
+  #  <<|>>|\{|}|\[|]|
+  #  <[a-fA-F0-9\000\011\012\014\015\040]*>| # hex string
+  #  \((?:[^\\()]+|\\[\000-\377])*\)| # literal string, the easy way
+  #  \( # an unfinished string, needs special care
+  #)@gx
+}
+
+#** @param $_[0] a filehandle (e.g \*STDIN), containing a PDF file, positioned
+#**  just before an `xref' table
+#** @param $_[1] an xref table: $_[1][4][56] is the file offset of object 56
+#**   from generation 4; will be extended
+#** @return the `trailer' section after the `xref'; or undef
+sub pdf_read_xref($$) {
+  # made much faster at Wed Dec 18 09:50:23 CET 2002
+  my $T;
+  my $E;
+  my $F=$_[0];
+  my $XREF=$_[1];
+  return undef if 8>read $F, $T, 1024;
+  return undef unless $T=~s@\A\s*xref\s+(\d+)\s+(\d+)\s+(?=\S)@@;
+  my ($first,$len,$flen);
+  while (1) {
+    ($first,$len)=($1+0,$2+0);
+    ## print " $first + $len\n";
+    $flen=($len*=20)-length($T)+20;
+    return undef unless $flen<1 or $flen==read $F, $T, $flen, length($T);
+    for (my $I=0;$I<$len;$I+=20, $first++) {
+      $E=substr($T, $I, 20);
+      return undef unless $E=~/\A(\d{10})\s(\d{5})\s([nf])\s\s/;
+      ## print "($1 $2 $3)\n";
+      $XREF->[$2+0][$first]=$1+0 if $3 eq 'n';
+    }
+    $E=substr($T, $len);
+    last if $E!~s@\A\s*(\d+)\s*(\d+)\s+(?=\S)@@; # next section
+    $T=$E;
+  }
+  
+  # die(-length($T)+$len);
+  ## die tell($F);
+  return undef if length($T)!=$len and !seek $F, -length($T)+$len, 1;
+  ## die tell($F);
+  return undef unless defined($T=pdf_read_obj($F));
+  $XREF->[0][0]=undef if defined $XREF->[0];
+  $XREF->[0][0]=$1+0 if $T=~m@ /Prev (\d+)@; # remember /Prev xref table
+  return undef unless $T=~m@\A trailer( .*) startxref\Z(?!\n)@s;
+  $1
+}
+
+$pdf_last_ref0=0;
+#** @param $_[0] a filehandle (e.g \*STDIN), containing a PDF file
+#** @param $_[1] an xref table: $_[1][4][56] is the file offset of object 56
+#**   from generation 4
+#** @param $_[2] an object number
+#** @param $_[3] a generation number
+#** @return PDF source code of the reference, or undef
+sub pdf_ref($$$$) {
+  my $F=$_[0]; my $XREF=$_[1]; my $ON=$_[2]+0; my $GN=$_[3]+0;
+  my $T;
+  $pdf_last_ref0=$ON if $GN==0;
+  ## print "REF $ON $GN;\n";
+  until (ref $XREF->[$GN] and defined ($T=$XREF->[$GN][$ON])) {
+    return undef if !ref $XREF->[0] or !defined $XREF->[0][0]; # no /Prev entry, `$ON $GN R' not found
+    return undef unless seek $F, $XREF->[0][0], 0;
+    return undef if !defined pdf_read_xref($F,$XREF);
+  }
+  ## print "REF at $T;\n";
+  return undef unless seek $F, $T, 0;
+  return undef unless defined($T=pdf_read_obj($F));
+  ## print "REF=($T);\n";
+  return undef unless $T=~s@\A (\d+) (\d+) obj\b(.*) (endobj|stream)\Z(?!\n)@$3@s;
+  $T
+}
+
+#** Gets a key from a direct dict, and resolves it if it is an indirect object
+#** @param $_[0] a filehandle (e.g \*STDIN), containing a PDF file
+#** @param $_[1] an xref table: $_[1][4][56] is the file offset of object 56
+#**   from generation 4
+#** @param $_[2] a PDF source dict (`<< ... >>') or array
+#** @param $_[3] a key (`/...')
+sub pdf_get($$$$) {
+  my $F=$_[0]; my $XREF=$_[1]; my $S=$_[2]; my $KEY=$_[3]; my $POS=0;
+  my $DEPTH=0; my $IS_DICT; my $C=0; my $N=0;
+  ## print "\n";
+  while ($S=~/\G (\S+)/g) {
+    $C=vec($1,0,8);  $POS=pos($S);
+    ## print "($1) $DEPTH $N\n";
+    if ($1 eq '>>' or $1 eq ']') {
+      return undef if 0==$DEPTH--;
+      last if !$DEPTH;
+      $N++ if 1==$DEPTH;
+    }
+    elsif ($DEPTH==1 and !$IS_DICT and $KEY==$N) { $POS=pos($S)-=length($1)+1; goto do_ret }
+    elsif ($1 eq '<<') { $IS_DICT=1 if 0==$DEPTH++ }
+    elsif ($1 eq '[') {
+      if (0==$DEPTH++) {
+        $IS_DICT=0;
+        return undef if $KEY!~/\A(\d+)\Z(?!\n)/; # err("non-numeric key in array")
+      }
+    }
+    elsif (0==$DEPTH) { return undef } # not in a composite object
+    elsif (1!=$DEPTH) { next }
+    elsif (!$IS_DICT) { $N++ }
+    elsif ($C==40) { $N++ } # `(': string or bare name
+    elsif ($C>=47 and $C<=57) { # '/': /name 0..9: number
+      ## print "TRY ($1) KEY=$KEY.\n";
+      next if ($N++&1)==1 or $1 ne $KEY;
+     do_ret:
+      ## print substr($S,pos($S)),";;\n";
+      return pdf_ref $F, $XREF, $1, $2 if $S=~/\G (\d+) (\d+) R\b/gc;
+      ## print substr($S,pos($S)),"::\n";
+      $DEPTH=0;
+      while ($S=~/\G( \S+)/g) {
+        if ($1 eq ' <<' or $1 eq ' [') { $DEPTH++ }
+        elsif ($1 eq ' >>' or $1 eq ' ]') {
+          ## die "($1)\n";
+          return undef if 0==$DEPTH--; # err("nesting")
+          return substr($S,$POS,pos($S)-$POS) if 0==$DEPTH;
+        } elsif ($DEPTH==0) { return $1 }
+      }
+    } else { $N++ } # bare name
+  }
+  return undef if $POS!=length($S); # err("invalid source dict");
+  "" # not found
+}
+
+# Unit test:
+#die unless pdf_get(\*STDIN, 0, ' [ al makorte 42 ]', 0) eq ' al';
+#die unless pdf_get(\*STDIN, 0, ' [ al makorte 42 ]', 1) eq ' makorte';
+#die unless pdf_get(\*STDIN, 0, ' [ al makorte 42 ]', 2) eq ' 42';
+#die unless pdf_get(\*STDIN, 0, ' [ al makorte 42 ]', 3) eq '';
+#die unless pdf_get(\*STDIN, 0, ' [ << >> ]', 0) eq ' << >>';
+#die unless pdf_get(\*STDIN, 0, ' [ << >> ]', 1) eq '';
+#die unless pdf_get(\*STDIN, 0, ' [ << >> [ al makorte 42 ] ]', 1) eq ' [ al makorte 42 ]';
+#die unless pdf_get(\*STDIN, 0, ' << /Alma [ 1 2 ] /Korte [ 3 4 ] >>', '/Korte') eq ' [ 3 4 ]';
+#die unless !defined pdf_get(\*STDIN, 0, ' [ al makorte 42 ]', '/Name');
+#die unless !defined pdf_get(\*STDIN, 0, ' << al makorte 42 >>', 42);
+#die unless pdf_get(\*STDIN, 0, ' << al makorte 42 137 >>', 42) eq ' 137';
+#die unless pdf_get(\*STDIN, 0, ' << al makorte >>', 'al') eq "";
+#die "OK";
+
+#** Reported boxes: /MediaBox /CropBox /BleedBox /TrimBox /ArtBox
+#** @param $_[0] a filehandle (e.g \*STDIN), containing a PDF file
+#** @param $_[1] an xref table: $_[1][4][56] is the file offset of object 56
+#**   from generation 4
+#** @param $_[2] a PDF source dict (`<< ... >>') of /Type/Catalog
+#**   /Type/Pages or /Type/Page
+#** @param $_[3] hashref to update. $_[3]{BleedBox}[2] will be the URX corner
+#**   of the BleedBox
+sub pdf_get_boxes($$$$) {
+  my $F=$_[0]; my $XREF=$_[1]; my $S=$_[2]; my $bbi=$_[3];
+  return if !defined $S;
+  for my $name (qw{MediaBox CropBox BleedBox TrimBox ArtBox}) {
+    my $box=pdf_get($F, $XREF, $S, "/$name");
+    next if !defined $box or !length $box
+         or $box!~m@ \[ ([0-9eE.-]+) ([0-9eE.-]+) ([0-9eE.-]+) ([0-9eE.-]+) \]\Z(?!\n)@
+         or !defined c_numval($1) or !defined c_numval($2) or !defined c_numval($3) or !defined c_numval($4);
+    ($bbi->{LLX},$bbi->{LLY},$bbi->{URX},$bbi->{URY})=($1+0,$2+0,$3+0,$4+0) if $name eq 'MediaBox';
+    my $name2="Info.$name";
+    ($bbi->{$name2}[0],$bbi->{$name2}[1],$bbi->{$name2}[2],$bbi->{$name2}[3])=($1+0,$2+0,$3+0,$4+0);
+  }
+}
+
+sub import {
+  no strict 'refs';
+  my $package=(caller())[0];
+  shift;
+  for my $p (@_ ? @_ : qw{pdf_get_boxes pdf_get pdf_read_xref pdf_read_obj
+    pdf_rewrite pdf_ref}) { *{$package."::$p"}=\&{$p} }
+}
+
+just::end}
+
+BEGIN{$  INC{'Htex/img_bbox.pm'}='Htex/img_bbox.pm'}
+
+package Htex::img_bbox;
+# img_bbox.pa -- detect file format and media parameters
+# This file contains embedded perldoc(1) POD documentation.
+# by pts@fazekas.hu at Sat Dec  7 21:31:01 CET 2002
+# JustLib2 at Sat Dec 21 21:29:21 CET 2002
+#
+# img_bbox.pl is a standalone Perl script that can extract file format,
+# width, height, bounding box and
+# other meta-information from image files. Supported vector formats are:
+# PDF, Flash SWF, EPS, PS, DVI and FIG. Supported raster image formats are:
+# GIF, JPEG, PNG, TIFF, XPM, XBM1, XBM, PNM, PBM, PGM, PPM, PCX, LBM, other
+# IFF, Windows and OS/2 BMP, MIFF, Gimp XCF, Windows ICO, Adobe PSD, FBM,
+# SunRaster, CMUWM, Utah RLE, Photo CD PCD, XWD, GEM, McIDAS, PM, SGI IRIS,
+# FITS, VICAR, PDS, FIT, Fax G3, Targa TGA and Faces.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# Extracting the image size is not supported for: other IFF, FIG.
+#
+#
+use just 1;
+use integer; # important
+use strict; # not so important
+# use Htex::ImgBBox qw(calc -PDF -paper);
+use Htex::ImgBBox qw(calc);
+
+sub delete0($$) {
+  delete $_[0]{$_[1]};
+  ""
+}
+
+#** @param $_[0] $bbi hashref
+#** @return a multiline dump of all key--value pairs, sorted by key
+sub all($) {
+  my $bbi=$_[0];
+  my $RET="";
+  for my $key (sort keys %$bbi) { if (1<length $key) {
+    my $val=$bbi->{$key};
+    $RET.="  $key = ".(ref($val)eq'ARRAY' ? "[ @$val ]\n" : "$val\n");
+  } }
+  $RET
+}
+
+my %texq;
+#** @param $_[0] arbitrary binary string
+#** @return the string quoted, so it can be safely placed inside TeX
+#**   \message{...} or \special{...}
+sub texq($) {
+  if (!keys %texq) {
+    $texq{' '}='\iftrue\space\fi '; # won't collapse two spaces into one
+   $texq{'\\'}='\expandafter\@secondoftwo\string\\\\';
+    $texq{'{'}='\expandafter\@secondoftwo\string\{';
+    $texq{'}'}='\expandafter\@secondoftwo\string\}';
+    $texq{'%'}='\expandafter\@secondoftwo\string\%';
+    $texq{'#'}='\expandafter\@secondoftwo\string\#';
+    $texq{'^'}='\expandafter\@secondoftwo\string\^'; # no danger of ^^
+    $texq{'~'}='\expandafter\@secondoftwo\string\~';
+    $texq{'`'}='\expandafter\@secondoftwo\string\`';
+    $texq{'"'}='\expandafter\@secondoftwo\string\"';
+    # vvv will work only if the token is expanded only once
+    #$texq{'~'}='\noexpand~';
+    #$texq{'`'}='\noexpand`';
+    #$texq{'"'}='\noexpand"';
+  }
+  my $S=$_[0];
+  $S=~s@(\W)@exists$texq{$1}?$texq{$1}:$1@ge;
+  $S=~s~([\000-\037\177-\377])~sprintf"\\expandafter\\\@secondoftwo\\string\\^^%02x",ord$1~ge;
+  $S
+}
+
+sub aq($$) {
+  $_[0] eq ":t" ? texq($_[1]) : $_[1]
+}
+
+my $t_short="%{FileName} %{FileFormat:-??} %{LLX:-??} %{LLY:-??} %{URX:-??} %{URY:-??}%{Paper?+ %{Paper}}%{Error?+ error:%{Error}}\n";
+my $t_long="%{FileName}%{FileName?0}\n%{all}";
+# my $t_tex='\graphicPmeta{%{FileName:t}%{c}{%{FileFormat:-?}%{c}{%{LLX:-?}%{c}{%{LLY:-?}%{c}{%{URX:-?}%{c}{%{URY:-?}%{c}%{n}';
+my $t_tex='\graphicPmeta{%{FileName:t}%{c}{%{FileFormat:-?}%{SubFormat?+.%{SubFormat}}%{c}{%{LLX:-?}%{c}{%{LLY:-?}%{c}{%{URX:-?}%{c}{%{URY:-?}%{c}%{n}';
+
+sub compile_template($) {
+  my $template=$_[0];
+  # convert $template to Perl code
+  $template=~s@([\\'])@\\$1@g;
+  $template=~s@([}])|[%][{]([\w.-]+)(:t)?(:-|[?][+0-]|)@
+    defined($1) ? "').'" :
+    $4 eq "" && $2 eq "all" ? "'.(all(\$bbi).'" :
+    $4 eq "" ? "'.(!defined\$bbi->{'$2'}?'':aq('".($3||"")."',\$bbi->{'$2'}).'" :
+    $4 eq "?+" ? "'.(!defined\$bbi->{'$2'}?'':'" :
+    $4 eq "?-" ? "'.(defined\$bbi->{'$2'}?'':'" :
+    $4 eq ":-" ? "'.(defined\$bbi->{'$2'}?aq('".($3||"")."',\$bbi->{'$2'}):'" :
+    $4 eq "?0" ? "'.(delete0(\$bbi,'$2').'" :
+    "[$1]($2)($4)" # should never happen
+  @ge;
+  my $sub=eval "sub { my \$bbi=\$_[0]; '$template' }";
+  die "$0: template syntax error: $@" if $@ or ref($sub) ne 'CODE';
+  $sub
+}
+
+sub work($$) {
+  my($sub,$filename)=@_;
+  my $bbi;
+  # die "$0: $filename: $!\n" unless open F, "< $filename";
+  if (open F, "< $filename") {
+    ## print STDERR "$filename\n";
+    $bbi=calc(\*F);
+  } else {
+    $bbi->{Error}="open: $!"
+  }
+  $bbi->{FileName}=$filename;
+  $bbi->{n}="\n";
+  $bbi->{p}="%";
+  $bbi->{c}="}";
+  print $sub->($bbi);
+}
+
+sub usage() {
+  die "This is img_bbox.pl by pts\@fazekas.hu
+This program is free software, licensed under the GNU GPL.
+This software comes with absolutely NO WARRANTY. Use at your own risk!
+
+Usage: $0 [<template>] <filename.image> [...]
+Template is one of: --  --short  --long  --tex  --template <t>
+
+I can detect file format, width, height, bounding box and other
+meta-information from image files. Run this to get more docs:
+	pod2man '$0' | man -l -\n"
+# ^^^ pod2man is better than perldoc(1), because perldoc(1) is not installed
+#     on some Debian systems.
+}
+
+just::main;
+
+usage if !@ARGV;
+
+my $template=$t_short;
+if ($ARGV[0] eq '--' or $ARGV[0] eq '--short') { }
+elsif ($ARGV[0] eq '--long') { $template=$t_long; shift @ARGV }
+elsif ($ARGV[0] eq '--tex') { $template=$t_tex; shift @ARGV }
+elsif ($ARGV[0] eq '--template') { usage if @ARGV<2; $template=$ARGV[1]; splice @ARGV, 0, 2 }
+elsif ($ARGV[0]=~/\A--/) { usage }
+
+my $sub=compile_template($template);
+for my $filename (@ARGV) { work $sub, $filename }
 
 __END__
 
+=begin man
+
+.ds pts-dev \*[.T]
+.do if '\*[.T]'ascii'  .ds pts-dev tty
+.do if '\*[.T]'ascii8' .ds pts-dev tty
+.do if '\*[.T]'latin1' .ds pts-dev tty
+.do if '\*[.T]'nippon' .ds pts-dev tty
+.do if '\*[.T]'utf8'   .ds pts-dev tty
+.do if '\*[.T]'cp1047' .ds pts-dev tty
+.do if '\*[pts-dev]'tty' \{\
+.ll 79
+.pl 33333v
+.nr IN 2n
+.\}
+.ad n
+
+=end man
+
 =head1 NAME
 
-img_bbox.pl - Extract file format and size from image files
+img_bbox.pl - detect file format and media parameters
 
 =head1 SYNOPSIS
 
-B<img_bbox.pl>	S<[ --long ]>
-	S<[ -- ]>
-	S<I<filename.image>>
-	S<[ ... ]>
+C<B<img_bbox.pl>>
+ S<[ C<--> | C<--short>>
+ S<| C<--long>>
+ S<| C<--tex>>
+ S<| C<--template> I<template> ]>
+ S<I<filename.image>> S<[ ... ]>
 
 =head1 DESCRIPTION
 
@@ -1294,6 +1494,393 @@ GIF, JPEG, PNG, TIFF, XPM, XBM1, XBM, PNM, PBM, PGM, PPM, PCX, LBM, other
 IFF, Windows and OS/2 BMP, MIFF, Gimp XCF, Windows ICO, Adobe PSD, FBM,
 SunRaster, CMUWM, Utah RLE, Photo CD PCD, XWD, GEM, McIDAS, PM, SGI IRIS,
 FITS, VICAR, PDS, FIT, Fax G3, Targa TGA and Faces.
+
+img_bbox.pl writes the detected information to STDOUT, in a format
+determined by the template specified on the command line. The default
+template is C<--short>. Templates are:
+
+=over 10
+
+=item C<--short>
+
+writes the file name, file format and the four
+bounding box coordinates (lower left x, lower left y, upper right x, upper
+right y), separated by spaces.
+
+=item C<--long>
+
+writes a multi-line entry for each file containing all key--value pairs
+that img_bbox.pl was able to detect.
+
+=item C<--tex>
+
+writes output suitable for C<\input> in TeX. The file name, file format and
+bounding box is dumped
+
+=item C<--pat>
+
+lets the user specify an individual pattern, see later.
+
+=back
+
+=head1 PATTERNS
+
+Individual patterns can be specified after C<--pat>. Built-in patterns are:
+
+ --short: %{FileName} %{FileFormat:-??} %{LLX:-??} %{LLY:-??} %{URX:-??} %{URY:-??}%{Paper?+ %{Paper}}%{Error?+ error:%{Error}}%{n}
+ --long : %{FileName}%{FileName?0}%{n}%{all}
+ --tex  : \graphicPmeta{%{FileName:t}%{c}{%{FileFormat:-?}%{c}{%{LLX:-?}%{c}{%{LLY:-?}%{c}{%{URX:-?}%{c}{%{URY:-?}%{c}%{n}
+
+Expressions of the form
+ C<%{> I<key> [ I<quoting> ] I<method> I<body> C<}>
+ are substituted.
+
+I<key>s of interest will be enumerated later in this subsection.
+
+I<quoting> is one of
+
+=over 7
+
+=item (none)
+
+The string is inserted as-is.
+
+=item C<:t>
+
+Quotes all TeX and LaTeX control characters.
+
+=back
+
+The interpretation of I<body> depends on I<method>. The default action is to
+append the contents of I<body> verbatim after the substitution. I<body> is
+an empty string most of the time.
+
+I<method> is one of
+
+=over 7
+
+=item (none)
+
+Expands to the value of I<key>, or an empty string. I<body> must be empty.
+
+=item C<:->
+
+Expands to the value of I<key>, or I<body>.
+
+=item C<?0>
+
+Deletes I<key>, and expands to I<body>.
+
+=item C<?+>
+
+Expands to I<body> if I<key> exists, or an empty string.
+
+=item C<?->
+
+Expands to I<body> if I<key> is missing, or an empty string.
+
+=back
+
+I<key>s of interest are:
+
+=over 20
+
+=item n
+
+a newline
+
+=item p
+
+a percent sign
+
+=item c
+
+a close brace
+
+=item all
+
+A detailed, multi-line key--value listing of all information detected, as
+output by the C<--long> template.
+
+=item FileName
+
+=item FileFormat
+
+=item SubFormat
+
+=item LLX
+
+Zero for most file formats.
+
+=item LLY
+
+Zero for most file formats.
+
+=item URX
+
+The width for most file formats.
+
+=item URY
+
+The height for most file formats.
+
+=item SamplesPerPixel
+
+=item BitsPerSample
+
+=item ColorSpace
+
+Gray, RGB, YCbCr, CMYK, YCCK, Indexed etc.
+
+=item Error
+
+the first I/O or other error
+
+=item Info.
+
+various file format specific keys begin with C<Info.>
+
+=item Val.
+
+various key--value pairs read from the file, beginning with C<Val.>
+
+=item Info.MediaBox
+
+PDF only
+
+=item Info.CropBox
+
+PDF only
+
+=item Info.BleedBox
+
+PDF only
+
+=item Info.TrimBox
+
+PDF only
+
+=item Info.ArtBox
+
+PDF only
+
+=item Info.Compression
+
+TIFF only
+
+=item Info.NewSubfileType
+
+TIFF only
+
+=item Info.PhotometricInterpretation
+
+TIFF only
+
+=item Info.Thresholding
+
+TIFF only
+
+=item Info.CellWidth
+
+TIFF only
+
+=item Info.CellLength
+
+TIFF only
+
+=item Info.FillOrder
+
+TIFF only
+
+=item Info.Orientation
+
+TIFF only
+
+=item Info.RowsPerStrip
+
+TIFF only
+
+=item Info.MinSampleValue
+
+TIFF only
+
+=item Info.MaxSampleValue
+
+TIFF only
+
+=item Info.PlanarConfiguration
+
+TIFF only
+
+=item Info.GrayResponseUnit
+
+TIFF only
+
+=item Info.ResolutionUnit
+
+TIFF only
+
+=item Info.ExtraSamples
+
+TIFF only
+
+=item Info.hvs
+
+JPEG only
+
+=item Info.id_rgb
+
+JPEG only
+
+=item Info.had_jfif
+
+JPEG only
+
+=item Info.ColorTransform
+
+JPEG only
+
+=item Info.binary
+
+Clean7Bit, Clean8Bit or Binary. PDF and PS only
+
+=item Info.linearized
+
+PDF only
+
+=item Info.denominator
+
+DVI only
+
+=item Info.nominator
+
+DVI only
+
+=item Info.version_id
+
+DVI only
+
+
+=item Info.maginification
+
+DVI only
+
+
+=item Info.jobname
+
+DVI only
+
+=item Info.page1_nr
+
+DVI only
+
+=item Info.special
+
+DVI only
+
+=item Info.colors
+
+ICO only
+
+=item Info.reserved
+
+ICO only
+
+
+=item Info.num_planes
+
+ICO only
+
+
+=item Info.credits
+
+FBM only
+
+=item Info.title
+
+FBM only
+
+=item Info.num_planes
+
+FBM only
+
+=item Info.bits
+
+FBM only
+
+=item Info.rowlen
+
+FBM only
+
+=item Info.plnlen
+
+FBM only
+
+=item Info.clrlen
+
+FBM only
+
+=item Info.hlen
+
+GEM only
+
+=item Info.colors
+
+GEM only
+
+=item Info.patlen
+
+GEM only
+
+=item Info.llen
+
+GEM only
+
+=item Info.lines
+
+GEM only
+
+=item Info.num_planes
+
+PM only
+
+=item Info.num_bands
+
+PM only
+
+=item Info.pixel_format
+
+PM only
+
+=item Info.compression
+
+SGI only
+
+=item Info.comment
+
+SGI only
+
+=item Info.bits_per_pixel
+
+FITS only
+
+=item Info.num_axis
+
+FITS only
+
+=item Info.depth
+
+FITS only
+
+=item Info.data_max
+
+FITS only
+
+=item Info.data_min
+
+FITS only
+
+=back
 
 =head1 LICENSE
 
