@@ -1077,7 +1077,7 @@ sub calc($) {
     # Dat: determining $bbi->{URX} and $bbi->{URY} would require a complex
     #      and full parsing of the G3 facsimile data
   } else {
-    $bbi->{Error}='unrecognised FileFormat'
+    $bbi->{Error}='format?' # Dat: unrecognised FileFormat
   }
  done:
   if ($have_paper and exists $bbi->{URX} and exists $bbi->{URY}) {
