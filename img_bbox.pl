@@ -1634,6 +1634,282 @@ sub any($) {
 
 just::end}
 
+BEGIN{$ INC{'Htex/Magic.pm'}='Htex/Magic.pm'} {
+package Htex::Magic;
+# Dat: not a real justlib2 package
+
+# --- <magic.pllib>
+#
+# by pts@fazekas.hu at Sat Jan 29 22:57:11 CET 2005
+# Dat: last update after Sun Jan 30 00:55:07 CET 2005
+# Imp: back to cvss.pl (try binary)
+
+#** @param $_[0] long string
+sub begins($$) {
+  substr($_[0], 0, length($_[1])) eq $_[1]
+}
+#** @param $_[0] long string
+sub ends($$) {
+  substr($_[0], -length($_[1])) eq $_[1]
+}
+
+#** ( ... [$name, $detect_sub, $good_extension(s), $bad_extensions, $description] ... )
+#** ripped from extfix.pl, but modified since
+#** 1024 bytes are read
+my @formats=(
+# Imp: .tar archive, see file(1) sources
+['text.empty', sub{!length$_[0]}, undef, [], 'empty'], # special
+['audio.MIDI', sub{begins$_[0],"MThd"}, '.mid', [qw(.midi)], 'standard MIDI'],
+['audio.RA', sub{begins$_[0],".ra\375"}, '.ra', [qw(.rm .ram)], 'RealAudio sound'],
+['video.RM', sub{begins$_[0],".RMF"}, '.rm', [qw(.ra .ram)], 'RealMedia'],
+['video.MOV.moov', sub{$_[0]=~/^....moov/s}, '.mov', [qw(.mpg .mpeg)], 'Apple QuickTime movie, moov'],
+['video.MOV.mdat', sub{$_[0]=~/^....mdat/s}, '.mov', [qw(.mpg .mpeg)], 'Apple QuickTime movie, mdat'],
+# vvv Dat: jP\0\0 or ftyp...
+['video.MOV.other', sub{$_[0]=~/^....(pnot|wide|skip|free|junk|PICT|idsc|idat|pckg)/s}, '.mov', [qw(.mpg .mpeg)], 'Apple QuickTime movie'],
+['video.MPEG.video', sub{begins$_[0],"\000\000\001\263"}, '.mpg', [qw(..mpeg .m1v .mpe .mpg.mpeg .mps .mpeg)], 'MPEG video stream'],
+['video.MPEG.system',sub{begins($_[0],"\000\000\001\272")or begins($_[0],"\n\000\000\001\272")}, '.mpg', [qw(..mpeg .m1v .mpe .mpg.mpeg .mps .mpeg)], 'MPEG system stream'],
+# vvv Dat: *.IFO and *.BUP on a mounted DVD (but not all of them match)
+#     Dat: not matches: VTS_01_0.{BUP,IFO}
+['data.video.DVD',sub{begins($_[0],"DVDVIDEO-VMG")}, '', [qw()], 'DVD video auxilary data'],
+['video.AVI.RIFF', sub{$_[0]=~/^RIF[FX]....AVI /s}, '.avi', [], 'AVI movie, RIFF'],
+['video.4X.RIFF',  sub{$_[0]=~/^RIF[FX]....4XMV/s}, '.avi', [], '4X movie, RIFF'],
+['video.MPEG.RIFF',sub{$_[0]=~/^RIF[FX]....CDXA/s}, '.mpeg',[], 'MPEG movie, RIFF'],
+['audio.MIDI.RIFF',sub{$_[0]=~/^RIF[FX]....RMID/s}, '.mid', [qw(.midi)], 'MIDI music, RIFF'],
+['video.MMV.RIFF', sub{$_[0]=~/^RIF[FX]....RMMP/s}, '.mmv', [], 'Multimedia movie, RIFF'],
+['audio.WAV.RIFF', sub{$_[0]=~/^RIF[FX]....WAVE/s}, '.wav', [], 'WAVE audio, RIFF'],
+['video.ASF', sub{begins$_[0],"\x30\x26\xb2\x75"}, '.asf', [qw(.wmv)], 'ASF movie'],
+['audio.Ogg.Vorbis', sub{$_[0]=~/^OggS........................\001vorbis/s}, '.ogg', [], 'OGG Vorbis music'],
+['audio.IT', sub{begins$_[0],"IMPM"}, '.it', [], 'IT Impulse Tracker music'],
+['audio.MP3.ID3', sub{begins$_[0],"ID3"}, '.fli', [], 'MP3 music'],
+# vvv Dat: one MP3 had 418 zeroes (so 1024 bytes of headers are enough)
+['audio.MP3', sub{$_[0]=~/^\0*\377[\373\372]/}, '.mp3', [qw(.mpeg3)], 'MP3 music'],
+['audio.MP2', sub{$_[0]=~/^\0*\377[\375\374]/}, '.mp2', [], 'MP2 music'],
+['audio.MP1', sub{$_[0]=~/^\0*\377[\360-\367]/}, '.mp2', [], 'MP1 music'],
+# vvv Dat: sometimes begins with `<script' or `<style' -- but we refuse these
+['text.HTML', sub{$_[0]=~/^(<!--.*?-->\s*)*<(?:html(?:>|\s*xmlns[:=])|head[>\s]|body[>\s]|title>)|<!doctype\shtml/is}, '.html', [], 'HTML document'],
+# Imp: DVD BUP and IFO
+# vvv Imp: UTF-16 XML
+['text.XML', sub{$_[0]=~/^<[?]xml\s+version=/}, '.html', [], 'HTML document'],
+['video.FLI', sub{begins$_[0],"\x11\xAF"}, '.fli', [], 'FLI movie'],
+['video.FLC', sub{begins$_[0],"\x12\xAF"}, '.fli', [], 'FLC movie'],
+['document.MSO', sub{$_[0]=~/^(?:\333\245-\0\0\0|\376\067\0\043|\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1)/}, [qw(.doc .xls .ppt)], [], 'Microsoft Office document'],
+['image.EPS.MPS', sub{$_[0]=~/^%![\r\n]/}, '.eps', [qw(.ps .epsi .eps2 .epsf)], 'Encapsulated PostScript figure'],
+['image.EPS.EPS', sub{$_[0]=~/^%!PS-Adobe-[\d.]+ EPSF-[\d.]/}, '.eps', [qw(.ps .epsi .eps2 .epsf)], 'Encapsulated PostScript figure'],
+['image.EPS.DOS', sub{begins$_[0],"\305\320\323\306"}, '.eps', [qw(.ps .epsi .eps2 .epsf)], 'Encapsulated PostScript figure'],
+['document.PS', sub{$_[0]=~/^%!PS-Adobe-[\d.]+[\r\n]/}, '.ps', [qw(.eps .epsi .eps2 .epsf)], 'PostScript document'],
+['document.PDF', sub{begins$_[0],"%PDF-"}, '.pdf', [], 'PDF document'],
+['document.UEL', sub{begins$_[0],"\033%-123456"}, '.uel', [], 'HP UEL'],
+['image.PNG', sub{begins$_[0],"\211PNG\r\n\032\n"}, '.png', [], 'PNG image'],
+['image.JPEG', sub{$_[0]=~/^(\377+\330)\377/}, '.jpg', [qw(.jpe .jpeg .gif)], 'JPEG image'],
+['image.TIFF.MSBfirst', sub{begins$_[0],"MM\000\052"}, '.tiff', [qw(.tif)], 'TIFF image'],
+['image.TIFF.LSBfirst', sub{begins$_[0],"II\052\000"}, '.tiff', [qw(.tif)], 'TIFF image'],
+['image.PNM.PBMraw', sub{$_[0]=~/P1[\s#]/}, '.asc.pbm', [qw(.pbm .pgm .ppm)], 'PBM image'],
+['image.PNM.PGMraw', sub{$_[0]=~/P2[\s#]/}, '.asc.pgm', [qw(.pbm .pgm .ppm)], 'PBM image'],
+['image.PNM.PPMraw', sub{$_[0]=~/P3[\s#]/}, '.asc.ppm', [qw(.pbm .pgm .ppm)], 'PBM image'],
+['image.PNM.PBM', sub{$_[0]=~/P4[\s#]/}, '.pbm', [qw(.pgm .ppm .asc.pbm .asc.pgm .asc.ppm)], 'PBM image'],
+['image.PNM.PGM', sub{$_[0]=~/P5[\s#]/}, '.pgm', [qw(.pbm .ppm .asc.pbm .asc.pgm .asc.ppm)], 'PGM image'],
+['image.PNM.PPM', sub{$_[0]=~/P6[\s#]/}, '.ppm', [qw(.pbm .ppm .asc.pbm .asc.pgm .asc.ppm)], 'PPM image'],
+['image.ART', sub{begins$_[0],"JG\004\016\0\0\0\0"}, '.art', [], 'AOL ART image'],
+['image.LBM', sub{$_[0]=~/^FORM....ILBMBMHD/s}, '.lbm', [qw(.ilbm)], 'LBM image'],
+['image.IFF.RGB8', sub{$_[0]=~/^FORM....RGB8/s}, '.rgb8.iff', [qw(.iff)], 'IFF RGB8 image'],
+['image.IFF.RGBN', sub{$_[0]=~/^FORM....RGBN/s}, '.rgbn.iff', [qw(.iff)], 'IFF RGBN image'],
+['image.BMP', sub{$_[0]=~/^BM....\0\0\0\0....[\014-\177]\0\0\0/s}, '.bmp', [qw(.rle .dib)], 'BMP image'],
+['image.XPM', sub{$_[0]=~/\A\s*\/[*]\s+XPM\s+[*]\//}, '.xpm', [], 'XPM image'],
+['image.XBM.1', sub{$_[0]=~/\A\s*\/\*\s*Format_version=\S*\s+/i}, '.xbm', [], 'XBM image'],
+['image.XBM.3', sub{$_[0]=~/\A(?:\/[*].*?[*]\/)?\s*#define\s+.*?_width\s+(\d+)\s*#define\s+.*?_height\s+(\d+)\s*/}, '.xbm', [], 'XBM image'],
+['image.XBM.2', sub{$_[0]=~/\A(?:\/[*].*?[*]\/)?\s*#define\s+.*?_height\s+(\d+)\s*#define\s+.*?_width\s+(\d+)\s*/}, '.xbm', [], 'XBM image'],
+['image.PCX', sub{$_[0]=~/\A\12[\0-\005]\001[\001-\10]/}, '.pcx', [], 'PCX PC Paintbrush image'],
+['image.DCX', sub{begins$_[0],"\xb1\x68\xde\x3a"}, '.dcx', [], 'DCX multi-page PCX image'],
+['image.Cineon', sub{begins$_[0],"\x80\x2a\x7e\x0d"}, '.cineon', [], 'Cineon image'], # Dat: ext??
+['image.BioRad', sub{length($_[0])>=43&&substr($_[0],43,2)eq"\x39\x30"}, '.pic', [], 'Bio-Rad .PIC image'], # Dat: ext??
+['image.MinoltaRAW', sub{begins$_[0],"\0MRM"}, '.mrw', [], 'Minolta Dimage camera raw image'],
+['document.DjVu', sub{begins($_[0],"AT&TFORM")&&$_[0]=~/\A............DJV[UIM]/s}, '.djvu', [], 'DjVu image or document'],
+['image.CGM', sub{begins$_[0],"\x30\x20"}, '.cgm', [], 'character Computer Graphics Metafile'],
+['image.GIF', sub{$_[0]=~/\AGIF(8[79]a)/}, '.gif', [], 'GIF image'],
+['document.DVI', sub{begins$_[0],"\367\002\001\203\222\300\34;\0\0"}, '.dvi', [], 'DVI document'],
+['image.MIFF', sub{$_[0]=~/^id=ImageMagick\r?\n/}, '.miff', [qw(.mif)], 'MIFF image'],
+# vvv Dat: not video.SWF, because video. is something playable with mplayer
+['interactive.SWF', sub{begins$_[0],"FWS"}, '.swf', [], 'SWF Macromedia ShockWave Flash movie'],
+['interactive.SWF.compressed', sub{begins$_[0],"CWS"}, '.swf', [], 'SWF Macromedia ShockWave Flash movie, compressed'],
+['image.XCF', sub{$_[0]=~/^gimp xcf (?:file|v\d\d\d)\0/}, '.xcf', [], 'XCF GIMP image'],
+['image.ICO', sub{$_[0]=~/\A\0\0\001\0[\001-\50]\0/}, '.ico', [], 'ICO Windows icon'],
+['image.PSD', sub{begins$_[0],"8BPS"}, '.psd', [], 'PSD Adobe Photoshop image'],
+['image.FBM', sub{begins$_[0],"\%bitmap\0"}, '.fmb', [], 'FBM Fuzzy Bitmap image'],
+['image.SunRaster', sub{begins$_[0],"\x59\xa6\x6a\x95"}, '.ras', [], 'Sun Raster image'],
+['image.CMUWM', sub{begins$_[0],"\361\0\100\273"}, '.cmuwm', [qw(.cmu)], 'CMUWM image'],
+['image.RLE', sub{begins$_[0],"\x52\xCC"}, '.rle', [], 'RLE Utah image'],
+['image.PCD', sub{begins$_[0],"\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377"}, '.pcd', [qw(.photocd .cd)], 'PCD Kodak Photo CD image'],
+['image.XWD.MSBfirst', sub{$_[0]=~/\A\0\0..\0\0\0[\001-\50]\0\0\0[\0-\002]\0\0\0([\001-\77])/s}, '.xwd', [], 'XWD image'],
+['image.XWD.LSBfirst', sub{$_[0]=~/\A..\0\0[\001-\50]\0\0\0[\0-\002]\0\0\0([\001-\77])\0\0\0/s}, '.xwd', [], 'XWD image'],
+['image.GEM', sub{$_[0]=~/\A\0\001\0[\010-\377](?:\0.|\001\0)\0.....(?:[\001-\37].|\0[^\0]|\40\0){2}/s}, '.gem', [], 'GEM Bit image'],
+['image.McIDAS.MSBfirst', sub{$_[0]=~/\A....\0\0\0\004....\0\0[\0-\001].\0\0[\0-\003]./s}, '.mcidas', [], 'McIDAS area image'],
+['image.McIDAS.LSBfirst', sub{$_[0]=~/\A....\004\0\0\0.....[\0-\001]\0\0.[\0-\003]\0\0/s}, '.mcidas', [], 'McIDAS area image'],
+['image.PM.MSBfirst', sub{begins$_[0],"VIEW"}, '.pm', [], 'PM image'],
+['image.PM.LSBfirst', sub{begins$_[0],"WEIV"}, '.pm', [], 'PM image'],
+['image.SGI.MSBfirst', sub{begins$_[0],"\001\332"}, '.sgi', [], 'SGI RGB image'],
+['image.SGI.LSBfirst', sub{begins$_[0],"\332\001"}, '.sgi', [], 'SGI RGB image'],
+['image.FITS', sub{begins$_[0],"SIMPLE  ="}, '.fits', [], 'FITS image'],
+['image.VICAR', sub{$_[0]=~/\A(?:NJPL1I|CCSD3Z|LBLSIZE=)/}, '.vicar', [], 'VICAR image'],
+['image.FIT', sub{$_[0]=~/^IT0[12]/}, '.fit', [], 'FIT image'],
+['image.FIG', sub{begins$_[0],"#FIG"}, '.fig', [], 'FIG image'],
+['data.TeX_format', sub{$_[0]=~/^.....\377\377\377\0\0\0\0\0.....\003.\0\0/s}, '.fmt', [], 'TeX format file'], # Dat: experimental
+['data.CLISP_bytecode', sub{begins$_[0],"(SYSTEM::VERSION\040'"}, undef, [], 'CLISP bytecode'],
+['data.CLISP_image', sub{begins($_[0],"\x70\x76\x8B\xD2")or begins($_[0],"\xD2\x8B\x76\x70")}, undef, [], 'CLISP memory image'],
+['document.PCL5', sub{begins$_[0],"\033E\033"}, '.pcl', [qw(.eps)], 'HP PCL5 printer data'], # /^\033E\033&l\d+A\033&l\d+S/
+['document.MSWord', sub{begins$_[0],"\x31\xbe\x00\x00"}, '.doc', [], 'Microsoft Word document'], # Imp: offsets >2000
+['document.MSWord', sub{begins$_[0],"PO^Q`"}, '.doc', [], 'Microsoft Word document'], # Imp: offsets >2000; Imp: ^
+['compress.Flate', sub{$_[0]=~/^\x78[\xDA\x9C\x5E\x20]/}, '.fla', [], 'FlateEncode RFC-1950 compressed'],
+['compress.compress', sub{begins$_[0],"\037\x9d"}, '.Z', [], 'compress compressed'], # [qw(.z)]
+['compress.gzip', sub{begins$_[0],"\037\x8b"}, '.gz', [], 'gzip RFC-1952 compressed'],
+['compress.pack', sub{begins$_[0],"\037\036"}, '.pack', [], 'pack compressed'],
+['compress.compact', sub{$_[0]=~/\A(?:\377\037|\037\377)/}, '.compact', [], 'compact compressed'],
+['compress.bzip2', sub{begins$_[0],"BZh"}, '.bz2', [], 'bzip2 compressed'],
+['compress.bzip1', sub{$_[0]=~/^BZ[^h]/}, '.bz', [], 'bzip1 compressed'],
+['compress.squeeze', sub{begins$_[0],"\x76\xff"}, '.squueze', [], 'squeeze compressed'],
+['compress.crunch', sub{begins$_[0],"\x76\xfe"}, '.crunch', [], 'crunch compressed'],
+['compress.LZH', sub{begins$_[0],"\x76\xfd"}, '.lzh', [], 'LZH compressed'],
+['compress.freeze2', sub{begins$_[0],"\037\237"}, '.freeze2', [], 'freeze2 compressed'],
+['compress.freeze1', sub{begins$_[0],"\037\236"}, '.freeze1', [], 'freeze1 compressed'],
+['compress.SCO_LZH', sub{begins$_[0],"\037\236"}, '.sco.lzh', [], 'SCO LZH compressed'],
+['compress.lzop', sub{begins$_[0],"\x89\x4c\x5a\x4f\x00\x0d\x0a\x1a\x0a"}, '.lzop', [], 'lzop compressed'],
+['archive.ARJ', sub{begins$_[0],"\x60\xEA"}, '.arj', [], 'ARJ archive'],
+['archive.LHA', sub{$_[0]=~/\A..-l[hz]/s}, '.lha', [], 'LHA archive'],
+['archive.RAR', sub{begins$_[0],"Rar!"}, '.rar', [], 'RAR archive'],
+['archive.UC2', sub{begins$_[0],"UC2\x1A"}, '.uc2', [], 'UC2 archive'],
+['archive.ZIP', sub{begins$_[0],"PK\003\004"}, '.zip', [], 'ZIP archive'],
+['archive.ZOO', sub{begins$_[0],"\xDC\xA7\xC4\xFD"}, '.zoo', [], 'ZOO archive'],
+['image.G3.Digifax', sub{$_[0]=~/\A.PC Research, Inc/s}, '.g3', [], 'G3 image'],
+['document.DVI', sub{$_[0]=~/^\367[\002-\005]/}, '.dvi', [], 'DVI document'],
+['image.TGA', sub{$_[0]=~/\A[\36-\77](?:\001[\001\11]|\0[\002\12\003\13])\0\0/ and vec($_[0], 1, 8)<=11 and (vec($_[0], 16, 8)<=8 or vec($_[0], 16, 8)==24)}, '.tga', [], 'TGA image'],
+['image.Faces', sub{$_[0]=~/^PicData:\s*(\d+)\s*(\d+)\s*(\d+)/m}, '.faces', [], 'FACES image'],
+['image.G3', sub{$_[0]=~/\A(?:[\001\024]\0|\0[\024\001])/s}, '.g3', [], 'G3 image'],
+['data.ELF.reloc',sub{$_[0]=~/^\177ELF............(?:\0\001|\001\0)/}, '', [], 'ELF relocatable'],
+['data.java.class',sub{begins$_[0],"\xca\xfe\xba\xbe"}, '.class', [], 'compiled Java class'],
+['exe.ELF.exec', sub{$_[0]=~/^\177ELF............(?:\0\002|\002\0)/}, '', [], 'ELF executable'],
+['data.ELF.shlib',sub{$_[0]=~/^\177ELF............(?:\0\003|\003\0)/}, '', [], 'ELF shared library'],
+['data.ELF.core', sub{$_[0]=~/^\177ELF............(?:\0\004|\004\0)/}, '', [], 'ELF core dump'],
+['exe.EXE.Win', sub{$_[0]=~/^MZ......................\@/}, '.exe', [], 'EXE Win, Win32 or OS/2'],
+['exe.EXE.DOS', sub{$_[0]=~/^MZ/}, '.exe', [], 'EXE MS-DOS'],
+['font.PFB', sub{$_[0]=~/^\200\001...\000%!PS-AdobeFont-/s}, '.pfb', [], 'PostScript Type1 PFB font'],
+['font.PFA', sub{begins$_[0],'%!PS-AdobeFont-'}, '.pfa', [], 'PostScript Type1 PFA font'],
+['font.GF',sub{begins$_[0],"\367\203"}, '.gf', [], 'TeX GF generic font'],
+['font.PF',sub{begins$_[0],"\367\131"}, '.pk', [], 'TeX PK packed font'],
+['font.VF',sub{begins$_[0],"\367\312"}, '.pk', [], 'TeX VF virtual font'],
+['text.transcript.tex',sub{$_[0]=~/^This is (?:pdf)?TeXk?,/}, '.log', [], 'TeX transcript'],
+['text.transcript.mf',sub{$_[0]=~/^This is METAFONTk?,/}, '.log', [], 'METAFONT transcript'],
+['text.transcript.mp',sub{$_[0]=~/^This is MetaPostk?,/}, '.log', [], 'METAPOST transcript'],
+['text.transcript.xindy',sub{begins($_[0], "This is `xindy' version ")or begins($_[0],";; This logfile was generated automatically by `xindy'")}, '.log', [], 'xindy transcript'],
+['text.latex.aux',sub{$_[0]=~/^\\relax \n(?:\\catcode\b[^\n]*\n)*$/ or $_[0]=~/^\\relax \n.*\\(?:select\@language|\@writefile|newlabel|citation|bib(?:style|data)|\@setckpt|\@mlabel|\@input)\s*[{]/s}, '.aux', [], 'LaTeX auxilary'],
+['text.latex.lot',sub{$_[0]=~/^(?:\\csname\b.*\n)*(\\\@Lang \\\S+\s+|\\(?:select\@language|addvspace)\s*[{][^}]*[}]\s+)*\\contentsline\s*[{]table[}]/s }, '.lot', [], 'LaTeX list of tables'],
+['text.latex.lof',sub{$_[0]=~/^(?:\\csname\b.*\n)*(\\\@Lang \\\S+\s+|\\(?:select\@language|addvspace)\s*[{][^}]*[}]\s+)*\\contentsline\s*[{]figure[}]/s}, '.lof', [], 'LaTeX list of figures'],
+['text.latex.toc',sub{$_[0]=~/^(?:\\csname\b.*\n)*(\\\@Lang \\\S+\s+|\\select\@language\s*[{][^}]*[}]\s+)*\\contentsline/s}, '.toc', [], 'LaTeX table of contents'], # must come after .lof and .lot
+['text.latex.sty',sub{$_[0]=~/^(\s+|%.*\n|\\NeedsTeXFormat\b[^}]+[}])*\\ProvidesPackage\s*[{]/}, '.sty', [], 'LaTeX package'],
+['text.latex.cls',sub{$_[0]=~/^(\s+|%.*\n|\\NeedsTeXFormat\b[^}]+[}])*\\ProvidesClass\s*[{]/}, '.sty', [], 'LaTeX document-class'],
+['text.latex.fd', sub{$_[0]=~/^(\s+|%.*\n|\\ProvidesFile\b[^\]]+\])*\\DeclareFont(?:Shape|Family)\s*[{]/}, '.fd', [], 'LaTeX font descriptor'],
+['text.latex',    sub{$_[0]=~/^(\s+|%.*\n)*(?:\\documentclass\s*[[{]|.*\\csname documentclass\\endcsname)/}, '.tex', [], 'LaTeX document'], # LateX2e and above
+['text.latex.209',sub{$_[0]=~/^(\s+|%.*\n)*\\documentstyle\s*[[{]/}, '.tex', [], 'LaTeX 2.09 document'],
+['text.tex',sub{$_[0]=~/^(\s+|%.*\n)*\\input\s/}, '.tex', [], 'TeX document'],
+# vvv Dat: not all found: CVS/Root, CVS/Repository and CVS/Entries
+['text.cvs.root',sub{$_[0]=~/^:(?:ext|pserver):/}, 'Root', [], 'CVS remote Root'],
+# Imp: There is no way to detect TeX Font Metric (*.tfm) files without
+# breaking them apart and reading the data.  The following patterns
+# match most *.tfm files generated by METAFONT or afm2tfm.
+['text.mpx',sub{begins$_[0],"% Written by DVItoMP, "}, '.mpx', [], 'MetaPost to TeX .mpx'],
+['text.manpage',sub{$_[0]=~/^([.]\\".*\n)*[.][ST]H /}, '.man', [], 'UNIX manual page'], # or other troff
+['text.FontMetrics.AFM',sub{begins$_[0],"StartFontMetrics "}, '.afm', [], 'Adobe AFM font metrics'],
+['data.fontMetrics.TFM',sub{ # ripped from tftopl.web in teTeX src
+  my($lf,$lh,$bc,$ec,$nw,$nh,$nd,$ni,$nl,$nk,$ne,$np)=unpack"nnnnnnnnnnnn",$_[0];
+  defined $np and
+  $lf<32768 and $lh<32768 and $bc<32768 and $ec<256   and
+  $nw<32768 and $nh<32768 and $nd<32768 and $ni<32768 and
+  $nl<32768 and $nk<32768 and $ne<=256  and $np<32768 and
+  $lf==6+$lh+$ec-$bc+1+$nw+$nh+$nd+$ni+$nl+$nk+$ne+$np
+}, '.tfm', [], 'TeX TFM font metrics'],
+['text.script.Perl', sub{$_[0]=~/^#!\s*\/[\w\/]*bin\/perl\s/}, '.pl', [], 'Perl script'],
+['text.script.TK', sub{$_[0]=~/^#!\s*\/[\w\/]*bin\/wish(?:-\d|\s)/}, '.pl', [], 'TK script'],
+['text.script.python', sub{$_[0]=~/^#!\s*\/[\w\/]*bin\/python(?:-?\d|\s)/}, '.py', [], 'Python script'],
+['text.script.loadkeys', sub{$_[0]=~/^#!\s*\/[\w\/]*bin\/loadkeys\s/}, undef, [], 'loadkeys script'], # Linux
+['text.script.TCL', sub{$_[0]=~/^#!\s*\/[\w\/]*bin\/tcls(?:-\d|\s)/}, '.pl', [], 'TCL script'],
+['text.script.xindy', sub{$_[0]=~/^(\s+|;.*\n)*[(]\s*(?:merge-rule\s|sort-rule\s|define-(?:rule-set|letter-groups|attributes|location-class|location-class-order|markup-index)\s|require\s")/}, '.xdy', [], 'xindy style file'], # Imp: more complete; Imp: require conflict
+['text.script.xindy', sub{$_[0]=~/^\s*;.*[.]xdy/}, '.xdy', [], 'xindy style file'], # Imp: more complete; Imp: require conflict
+['text.script.Perl.magic', sub{$_[0]=~/^#!\s*\/bin\/sh\s.*?\n#!perl\s/s}, '.pl', [], 'Perl script'],
+['text.script.Ruby.magic', sub{$_[0]=~/^#!\s*\/bin\/sh\s.*?\n#!ruby\s/s}, '.rb', [], 'Ruby script'],
+['text.shell.sh', sub{$_[0]=~/^#!\s*\/bin\/sh\s/}, '.sh', [], 'shell script'],
+['text.shell.bash', sub{$_[0]=~/^#!\s*\/[\w\/]*bin\/bash\s/}, '.sh', [], 'shell script'],
+['text.shell.zsh', sub{$_[0]=~/^#!\s*\/[\w\/]*bin\/zsh\s/}, '.sh', [], 'shell script'],
+['text.shell.csh', sub{$_[0]=~/^#!\s*\/[\w\/]*bin\/csh\s/}, '.csh', [], 'shell script'],
+['text.shell.tcsh', sub{$_[0]=~/^#!\s*\/[\w\/]*bin\/tcsh\s/}, '.csh', [], 'shell script'],
+['text.shell.ksh', sub{$_[0]=~/^#!\s*\/[\w\/]*bin\/(?:pd)?ksh\s/}, '.csh', [], 'shell script'],
+['image.TGA.fallback', sub{30<=vec($_[0], 0, 8) and vec($_[0], 0, 8)<=63 and vec($_[0], 1, 8)<=11 and (vec($_[0], 16, 8)<=8 or vec($_[0], 16, 8)==24)}, '.tga', [], 'TGA image'],
+['text.info', sub{$_[0]=~/^This is .*, produced by [Mm]akeinfo[ -]/}, [qw(.htm)], [], 'INFO document'],
+['text.HTML', sub{$_[0]=~/^\s*(?:<!\s*doctype\s[^>]+>\s*)?<\s*html\s*>/i}, '.html', [qw(.htm)], 'HTML document'], # again # Imp: xhtml
+['text.mp',sub{begins$_[0],"%% A MetaPost source file."}, '.mp', [], 'MetaPost source'], # generated by eempost.sty
+['text.latex.fd', sub{$_[0]=~/\\DeclareFont(?:Shape|Family)\s*[{]/}, '.fd', [], 'LaTeX font descriptor'],
+['text.DEADJOE',sub{begins$_[0],"\n*** Modified files in JOE when it aborted on "}, '.mpx', [], 'JOE DEADJOE'],
+['text.missfont.log',sub{begins$_[0],"mktexpk --mfmode "}, 'missfont.log', [], 'TeX missfont.log'],
+['text.fontmap.dvipdfm',sub{begins$_[0],'% dvipdfm(1) Type1 font map file'}, 'map', [], 'dvipdfm fontmap'], # Dat: by dff.pl
+['text.fontmap.dvips',sub{$_[0]=~/^% \S+ Type1 font map file/ or begins($_[0],"% psfonts.map:")}, 'map', [], 'dvips fontmap'], # Dat: by dff.pl
+['text.cvs.entries',sub{$_[0]=~m@^D?/[^/]+/[^/]*/[^/]*/[^/]*/$@}, 'Entries', [], 'CVS Entries'],
+['text.latex.sty',sub{$_[0]=~/\\ProvidesPackage\s*[{]/}, '.sty', [], 'LaTeX package'],
+['data.misc.UTF-16', sub{substr($_[0],0,2)eq"\377\376" or substr($_[0],0,2)eq"\376\377"}, [qw(.txt .dat)], [], 'non-text, UTF-16'], # Dat: not `text.', because CVS may not modify RCS tags
+['data.misc.UTF-16', sub{
+  my $MF=grep{$_>7&&($_<14||($_>31&&$_<127))} unpack"n*",$_[0];
+  my $LF=grep{$_>7&&($_<14||($_>31&&$_<127))} unpack"v*",$_[0];
+  my $ml=length($_[0])/3; # 2/3 of the chars must be low (typical: 2*.47)
+  $MF>$ml or $LF>$ml
+}, [qw(.txt .dat)], [], 'non-text, UTF-16'], # Dat: not `text.', because CVS may not modify RCS tags
+['text.misc.ASCII', sub{ $_[0]=~/\A[\010-\015\040-\176]+\Z(?!\n)/}, [qw(.txt .dat)], [], 'text, UTF-8'],
+['text.misc.UTF-8', sub{ $_[0]=~/\A(?:[\010-\015\040-\176]+|[\xC0-\xDF][\x80-\xBF]|[\xE0-\xEF][\x80-\xBF]{2}|[\xF0-\xF7][\x80-\xBF]{3})*(?:[\xC0-\xDF]|[\xE0-\xEF][\x80-\xBF]{0,1}|[\xF0-\xF7][\x80-\xBF]{0,2})?\Z(?!\n)/}, [qw(.txt .dat)], [], 'text, UTF-8'],
+['text.misc.DOS', sub{$_[0]!~/[\000-\010\016-\037\177-\237]/ and $_[0]=~/\r\n/}, [qw(.txt .dat)], [], 'text, CRLF'],
+['text.misc.Mac', sub{$_[0]!~/[\000-\010\016-\037\177-\237]/ and $_[0]=~/\r/}, [qw(.txt .dat)], [], 'text, CR'],
+['text.misc.UNIX',sub{$_[0]!~/[\000-\010\016-\037\177-\237]/ and $_[0]=~/\n/}, [qw(.txt .dat)], [], 'text, LF'],
+# vvv Dat: allow \008 (backspace)
+['text.misc.misc',   sub{$_[0]!~/[\000-\007\016-\037\177-\237]/ and length($_[0])!=0}, '.txt', [], 'text'],
+['data.misc.zeros',     sub{$_[0]!~/[^\0]/}, '', [], 'binary of zeroes'],
+# ['unknown', sub{1}, '.dat', [], 'unknown'], # special
+);
+
+#** @return ($FileFormat,$Description)
+sub detect_magic($) {
+  my $fn=$_[0];
+  my $FileFormat;
+  my $Description;
+  my $head;
+  if ($fn eq'-') {
+    # Dat: we have to be able to seek!
+    die if!open FIXF, "<&STDIN";
+  } else {
+    if (!open FIXF, "< $fn") {
+      $FileFormat='error.cannot_open';
+      $Description="IO: cannot_open: $!"; goto FOUND;
+    }
+    # Imp: detail special inodes
+    if (!lstat $fn) { $FileFormat='error.missing'; $Description='IO: missing'; goto FOUND } # Dat: usually not reached
+    elsif (-d _) { $FileFormat=$Description='node.directory'; goto FOUND }
+    elsif (!-f _) { $FileFormat=$Description='node.special'; goto FOUND }
+  }
+  if (!defined sysread FIXF, $head, 1024) {
+    $FileFormat='error.cannot_read';
+    $Description="IO: cannot_read: $!"; goto FOUND;
+  }
+  die if !close FIXF;
+  for my $F (@formats) {
+    if ($F->[1]->($head)) {
+      $FileFormat=$F->[0];
+      $Description=$F->[4];
+      # @goodexts=listof($F->[2]); @badexts=@{$F->[3]};
+      goto FOUND;
+    }
+  }
+  $FileFormat=$Description='data.misc.unknown';
+ FOUND:
+  ($FileFormat,$Description)
+}  
+
+# --- </magic.pllib>
+
+just::end}
+
 BEGIN{$  INC{'Htex/img_bbox.pm'}='Htex/img_bbox.pm'}
 
 package Htex::img_bbox;
@@ -1662,6 +1938,7 @@ use integer; # important
 use strict; # not so important
 # use Htex::ImgBBox qw(calc -PDF -paper);
 use Htex::ImgBBox qw(calc);
+use Htex::Magic;
 
 sub delete0($$) {
   delete $_[0]{$_[1]};
@@ -1851,17 +2128,31 @@ sub work($$) {
   my($sub,$filename)=@_;
   my $bbi;
   # die "$0: $filename: $!\n" unless open F, "< $filename";
+
+  my($FileMagic,$Description)=Htex::Magic::detect_magic($filename);
   if (open F, "< $filename") {
     ## print STDERR "$filename\n";
     $bbi=calc(\*F);
   } else {
     $bbi->{Error}="open: $!"
   }
+  if ($bbi->{FileFormat} eq 'unknown' and
+    $FileMagic ne 'unknown' and
+    $FileMagic!~/\A(?:text|data)[.]misc[.]/) {
+    $bbi->{FileFormat}=$FileMagic;
+    delete $bbi->{Error}; # Dat: usually "format?"
+  }
+  $bbi->{Error}=$Description if !exists $bbi->{Error} and
+    substr($Description,0,4)eq"IO: ";
+  $bbi->{Error}='format?' if !exists $bbi->{Error} and
+    $FileMagic=~/\A(?:text|data)[.]misc[.]/;
+  $bbi->{FileMagic}=$FileMagic; # Dat: $bbi->{FileFormat} is set by calc()
   if ($bbi->{FileFormat}=~m@\A([^.]+)[.](.*)@s) { # Dat: true when from MPlayer
     $bbi->{FileFormat}=$1;
     $bbi->{SubFormat}=$2;
   }
   $bbi->{FileName}=$filename;
+  $bbi->{Description}=$Description;
   $bbi->{n}="\n";
   $bbi->{p}="%";
   $bbi->{c}="}";
