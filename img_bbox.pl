@@ -392,12 +392,31 @@ sub calc($) {
     # die $have_pdf;
     goto done if !$have_pdf;
     # if ($head=~m@\A(?:%[^\r\n]*[\r\n])*.{0,40}/Linearized@s and $head=~m@\A(?:%[^\r\n]*[\r\n])*.{0,200}/O\s+(\d+)@s) {
+    my $had_pdfboxes=($head=~m@/Type\s*/pdfboxes%@); # `%' is important
     $head=pdf_rewrite($head,1);
     my $page1obj;
-    if (defined $head and $head=~m@/Linearized\s+@ and $head=~m@/O\s+(\d+)@) {
-      $bbi->{'Info.linearized'}=1;
-      $page1obj=$bbi->{'Info.page1obj'}=$1+0;
-    } else { $bbi->{'Info.linearized'}=0 }
+    $bbi->{'Info.linearized'}=0;
+    $bbi->{'Info.pdfboxes'}=0;
+    if (defined $head) {
+      $head=~s@\bendobj.*@@s;
+      if ($had_pdfboxes) {
+        # a hint of very strict format, by 
+        $head="";
+        goto IOerr if !seek($F, 0, 0) or 20>read($F, $head, 2048);
+        goto SYerr unless $head=~/\d\s+\d+\s+obj\s*(.*?)\bendobj/s;
+        $head=$1; goto SYerr unless $head=~m@/Type\s*/pdfboxes%@;
+        while ($head=~m@^\s*/(\w+Box)\s*\[\s*(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s*\]@gm) {
+          ## print "($1) ($2) ($3) ($4) ($5)\n";
+          ($bbi->{LLX},$bbi->{LLY},$bbi->{URX},$bbi->{URY})=($2,$3,$4,$5) if $1 eq 'MediaBox';
+          $bbi->{"Info.$1"}=[$2,$3,$4,$5];
+        }
+        $bbi->{'Info.pdfboxes'}=1;
+        goto done;
+      } elsif ($head=~m@/Linearized\s+@ and $head=~m@/O\s+(\d+)@) {
+        $bbi->{'Info.linearized'}=1;
+        $page1obj=$bbi->{'Info.page1obj'}=$1+0;
+      }
+    }
     goto IOerr if !seek $F, -1024, 2 and !seek $F, 0, 0;
     goto IOerr if 1>read $F, $head, 1024;
     goto SYerr if $head!~/startxref\s+(\d+)\s*%%EOF\s*\Z(?!\n)/
