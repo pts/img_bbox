@@ -186,6 +186,9 @@ use Pts::string;
 #   'LLY' => ... # lower left y (usually 0)
 #   'URX' => ... # upper right x (usually width)
 #   'URY' => ... # upper right y (usually height)
+#   'BitsPerSample' => ... # optional
+#   'SamplesPerPixel' => ... # optional
+#   'ColorSpace' => ... # optional
 # }
 
 # Dat: \usepackage[hiresbb]{graphicx}
