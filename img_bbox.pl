@@ -1871,11 +1871,12 @@ my @formats=(
 # ['unknown', sub{1}, '.dat', [], 'unknown'], # special
 );
 
-#** @return ($FileFormat,$Description)
+#** @return ($FileFormat,$Description,$BestExt)
 sub detect_magic($) {
   my $fn=$_[0];
   my $FileFormat;
   my $Description;
+  my $BestExt='';
   my $head;
   if ($fn eq'-') {
     # Dat: we have to be able to seek!
@@ -1898,6 +1899,7 @@ sub detect_magic($) {
   for my $F (@formats) {
     if ($F->[1]->($head)) {
       $FileFormat=$F->[0];
+      $BestExt=$F->[2];
       $Description=$F->[4];
       # @goodexts=listof($F->[2]); @badexts=@{$F->[3]};
       goto FOUND;
@@ -1905,7 +1907,7 @@ sub detect_magic($) {
   }
   $FileFormat=$Description='data.misc.unknown';
  FOUND:
-  ($FileFormat,$Description)
+  ($FileFormat,$Description,$BestExt)
 }  
 
 # --- </magic.pllib>
@@ -2082,10 +2084,25 @@ sub print_xml($) {
   "</file>\n\n" # Dat: print retval
 }
 
+# at Sat Feb 26 21:26:22 CET 2005
+sub print_addext($) {
+  my $h=$_[0];
+  my $fn=$h->{FileName};
+  if (0!=length $h->{BestExt}) {
+    $fn=~s@[.][^./]+\Z(?!\n)@@;
+    $fn.=$h->{BestExt};
+    if ($fn ne $h->{FileName}) {
+      return "mv  ".shq($h->{FileName})."  ".shq($fn)."\n";
+    }
+  }
+  ""
+}
+
 my %yamlsq=("\\"=>"\\\\","\n"=>"\\n","\t"=>"\\t","\r"=>"\\r","\""=>"\\\"");
+my %yamlspec=qw(nil 1 true 1 false 1 null 1 NULL 1);
 sub yamlsq($) {
   my $S=$_[0];
-  return $S if $S=~/^[a-zA-Z_]\w*\Z(?!\n)/; # Imp: omit quotes for "3.5f"
+  return $S if $S=~/^[a-zA-Z_]\w*\Z(?!\n)/ and !exists$yamlspec{$S}; # Imp: omit quotes for "3.5f"
   $S=~s@([^ -~])@exists$yamlsq{$1}?$yamlsq{$1}:sprintf("\\x%02x",ord$1)@ge;
   "\"$S\""
 }
@@ -2131,7 +2148,7 @@ sub work($$;$) {
   my $bbi;
   # die "$0: $filename: $!\n" unless open F, "< $filename";
 
-  my($FileMagic,$Description)=Htex::Magic::detect_magic($filename);
+  my($FileMagic,$Description,$BestExt)=Htex::Magic::detect_magic($filename);
   if ($use_mplayer and (substr($FileMagic,0,6)eq'video.' or substr($FileMagic,0,6)eq'audio.')) {
     $bbi={'FileFormat'=>substr($FileMagic,6)};
     my $MYDIR=$0;
@@ -2226,6 +2243,8 @@ sub work($$;$) {
   }
   $bbi->{FileName}=$filename;
   $bbi->{Description}=$Description;
+  $BestExt=$BestExt->[0] if 'ARRAY'eq ref $BestExt;
+  $bbi->{BestExt}=$BestExt; # Dat: best filename extension -- or empty string
   $bbi->{n}="\n";
   $bbi->{p}="%";
   $bbi->{c}="}";
@@ -2246,7 +2265,8 @@ This program is free software, licensed under the GNU GPL.
 This software comes with absolutely NO WARRANTY. Use at your own risk!
 
 Usage: $0 [<template>] [--mplayer] <filename.image> [...]
-Template is one of: --  --short  --long  --tex  --xml --yaml  --template <t>
+Template is one of: --  --short  --long  --tex  --xml --yaml --addext
+  --template <t>
 
 I can detect file format, width, height, bounding box and other
 meta-information from image files. Run this to get more docs:
@@ -2265,6 +2285,7 @@ my $use_mplayer=0;
 if ($ARGV[0] eq '--' or $ARGV[0] eq '--short') {}
 elsif ($ARGV[0] eq '--xml') { $sub=\&print_xml; shift @ARGV }
 elsif ($ARGV[0] eq '--yaml') { $sub=\&print_yaml; shift @ARGV }
+elsif ($ARGV[0] eq '--addext') { $sub=\&print_addext; shift @ARGV }
 elsif ($ARGV[0] eq '--long') { $template=$t_long; shift @ARGV }
 elsif ($ARGV[0] eq '--tex') { $template=$t_tex; shift @ARGV }
 elsif ($ARGV[0] eq '--template') { usage if @ARGV<2; $template=$ARGV[1]; splice @ARGV, 0, 2 }
