@@ -250,7 +250,9 @@ sub calc($) {
   } elsif ($head=~m@\AP([1-6])[\s#]@) { # PNM
     $bbi->{FileFormat}='PNM';
     my @subformats=qw{- PBM.text PGM.text PPM.text PBM.raw PGM.raw PPM.raw};
+    my @colorspaces=qw(- Gray Gray RGB Gray Gray RGB);
     $bbi->{SubFormat}=$subformats[0+$1];
+    $bbi->{ColorSpace}=$colorspaces[0+$1];
     goto IOerr if 0>read $F, $head, 1024-length($head), length($head);
     $head=~s@#.*@@g; # remove comments
     goto SYerr if ($head!~/\AP[1-6]\s+(\d+)\s+(\d+)\s/);
