@@ -172,9 +172,7 @@ package Htex::ImgBBox;
 use just;
 use integer;
 use strict;
-use Htex::PDFread;
 use Htex::dimen;
-use Htex::papers;
 use Pts::string;
 # use Data::Dumper;
 
@@ -195,6 +193,10 @@ use Pts::string;
 #      /MediaBox[a b c d], \ht=d, \wd=c, and no overwrite below (a,b)
 
 # ---
+
+#** import will set them
+my $have_pdf;
+my $have_paper;
 
 #** May moves the file offset, but only relatively (SEEK_CUR).
 #** @param $_[0] \*FILE
@@ -380,6 +382,8 @@ sub calc($) {
     # Imp: better distinguish between IOerr and SYerr
     $bbi->{SubFormat}=$1 if $head=~/\A%PDF-([\d.]+)/;
     $bbi->{'Info.binary'}=($head=~/\A[^\r\n]+[\r\n]+[ -~]*[^\n\r -~]/) ? 'Binary' : 'Clean7Bit';
+    # die $have_pdf;
+    goto done if !$have_pdf;
     # if ($head=~m@\A(?:%[^\r\n]*[\r\n])*.{0,40}/Linearized@s and $head=~m@\A(?:%[^\r\n]*[\r\n])*.{0,200}/O\s+(\d+)@s) {
     $head=pdf_rewrite($head,1);
     my $page1obj;
@@ -934,7 +938,7 @@ sub calc($) {
     $bbi->{Error}='unrecognised FileFormat'
   }
  done:
-  if (exists $bbi->{URX} and exists $bbi->{URY}) {
+  if ($have_paper and exists $bbi->{URX} and exists $bbi->{URY}) {
     ($bbi->{Paper},$bbi->{PaperWidth},$bbi->{PaperHeight})=@L[0,1,2] if
       @L=Htex::papers::valid_bp($bbi->{URX},$bbi->{URY},$bbi->{LLX},$bbi->{LLY});
   } else {
@@ -948,9 +952,14 @@ sub import {
   no strict 'refs';
   my $package=(caller())[0];
   shift;
+  ($have_paper,$have_pdf)=(1,1);
   for my $p (@_) {
+    if ($p eq '-PDF') { $have_pdf=0 }
+    elsif ($p eq '-paper') { $have_paper=0 }
     else { *{$package."::$p"}=\&{$p} }
   }
+  if ($have_pdf) { require Htex::PDFread; import Htex::PDFread }
+  if ($have_paper) { require Htex::papers; import Htex::papers }
 }
 
 just::end}
