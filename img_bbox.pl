@@ -1735,6 +1735,118 @@ sub compile_template($) {
   $sub
 }
 
+sub shq($) {
+  return $_[0] if $_[0]=~/\A[-.\/\w]+\Z(?!\n)/;
+  my $S=$_[0];
+  $S=~s@'@'\\''@g;
+  $S
+}
+
+my %numberkeys=qw{LLX 1 LLY 1 URX 1 URY 1 Audio.BITRATE 1 Audio.ID 1
+  Audio.NCH 1 Audio.RATE 1 Video.ASPECT 1 Video.BITRATE 1 Video.FPS 1
+  Video.ID 1 Info.num_bits 1 SamplesPerPixel 1 BitsPerSample 1
+  Info.num_pages 1 Info.num_planes 1 Info.ColorTransform 1
+  Info.had_jfif 1 Info.hvs 1 Info.id_rgb 1 Duration 1
+};
+#my %boolkeys=qw{Info.had_jfif}; # Dat: not introduced
+
+#** Changes $h->{'foo.bar'} to $h->{'foo'}->{'bar'} (one level only)
+#** @param $_[0] hashref
+#** @return $_[0]
+sub add_hierarchy($) {
+  my $h=$_[0];
+  my $new;
+  for my $key (keys%$h) {
+    if ($key=~m@\A([^.]+)[.](.*)@s) {
+      die if defined $h->{$1} and 'HASH'ne ref $h->{$1};
+      $h->{$1}={} if !defined $h->{$1};
+      $h->{$1}{$2}=$h->{$key};
+      delete $h->{$key};
+    }
+  }
+  $h
+}
+
+my %hq=qw{< &lt; > &gt; ' &apos; " quot; & &amp;};
+sub hq($) {
+  my $S=$_[0];
+  $S=~s@([<>&"])@$hq{$1}@g;
+  $S
+}
+
+sub print_xml_hash($$);
+sub print_xml_hash($$) {
+  my($h,$pre)=@_;
+  for my $key (sort keys%$h) { my $val=$h->{$key};
+    $key=~s@[^a-zA-Z0-9]@@g; # Imp: is `_' allowed?
+    $key=~s@\A(?![a-zA-Z])@N@;
+    if ('HASH'eq ref$val) {
+      print "$pre<$key>\n";
+      print_xml_hash($val,"$pre  ");
+      print "$pre</$key>\n";
+    } else {
+      $val="[ @$val ]\n" if ref($val)eq'ARRAY';
+      print "$pre<$key>@{[hq$val]}</$key>\n"
+    }
+  }
+}
+
+sub print_xml($) {
+  my $h=$_[0];
+  for my $key (keys%$h) { delete $h->{$key} if length($key)<2 }
+  # ^^^ Dat: remove $bbi->{n} etc.
+  add_hierarchy $h;
+  print "<?xml version=\"1.0\" encoding=\"iso-8859-1\"?>\n";
+  print "<file name=\"@{[hq$h->{FileName}]}\">\n";
+  delete $h->{FileName};
+  print_xml_hash($h,"  ");
+  "</file>\n\n" # Dat: print retval
+}
+
+my %yamlsq=("\\"=>"\\\\","\n"=>"\\n","\t"=>"\\t","\r"=>"\\r","\""=>"\\\"");
+sub yamlsq($) {
+  my $S=$_[0];
+  return $S if $S=~/^[a-zA-Z_]\w*\Z(?!\n)/; # Imp: omit quotes for "3.5f"
+  $S=~s@([^ -~])@exists$yamlsq{$1}?$yamlsq{$1}:sprintf("\\x%02x",ord$1)@ge;
+  "\"$S\""
+}
+
+sub print_yaml_hash($$);
+sub print_yaml_hash($$) {
+  my($h,$pre)=@_;
+  for my $key (sort keys%$h) { my $val=$h->{$key};
+    print $pre.yamlsq($key).": ";
+    if ('HASH'eq ref$val) {
+      print "\n";
+      print_yaml_hash($val,"$pre  ");
+    } elsif ('number'eq ref$val) {
+      print "$val->[0]\n";
+    } else {
+      $val="[ @$val ]\n" if ref($val)eq'ARRAY';
+      print yamlsq($val)."\n";
+    }
+  }
+}
+
+my $yaml_hash_header="--- \n";
+sub print_yaml($) {
+  my $h=$_[0];
+  for my $key (keys%$h) {
+    if (length($key)<2) {
+      delete $h->{$key}; # Dat: remove $bbi->{n} etc.
+    } elsif (exists$numberkeys{$key}) {
+      $h->{$key}=bless [$h->{$key}], 'number'; # Dat: deep wizardry
+    }
+  }
+  add_hierarchy $h;
+  my $i={$h->{FileName}=>$h};
+  delete $h->{FileName};
+  print $yaml_hash_header; $yaml_hash_header="";
+  print_yaml_hash($i,"");
+  "" # Dat: don't print "\n", so yaml hashes of files will be concatenated
+  # "\n" # Dat: this is not part of the YAML; additional whitespace is OK
+}
+
 sub work($$) {
   my($sub,$filename)=@_;
   my $bbi;
@@ -1745,10 +1857,22 @@ sub work($$) {
   } else {
     $bbi->{Error}="open: $!"
   }
+  if ($bbi->{FileFormat}=~m@\A([^.]+)[.](.*)@s) { # Dat: true when from MPlayer
+    $bbi->{FileFormat}=$1;
+    $bbi->{SubFormat}=$2;
+  }
   $bbi->{FileName}=$filename;
   $bbi->{n}="\n";
   $bbi->{p}="%";
   $bbi->{c}="}";
+  # Dat: $bbi->{URX} etc. might be float (see SWF, EPS and PDF)
+  { no integer;
+    for my $key (keys %numberkeys) {
+      # vvv Imp: proper error message if format is wrong
+      ## print "$key\n";
+      $bbi->{$key}=$bbi->{$key}+0 if defined $bbi->{$key};
+    }
+  }
   print $sub->($bbi);
 }
 
@@ -1758,7 +1882,7 @@ This program is free software, licensed under the GNU GPL.
 This software comes with absolutely NO WARRANTY. Use at your own risk!
 
 Usage: $0 [<template>] <filename.image> [...]
-Template is one of: --  --short  --long  --tex  --template <t>
+Template is one of: --  --short  --long  --tex  --xml --yaml  --template <t>
 
 I can detect file format, width, height, bounding box and other
 meta-information from image files. Run this to get more docs:
@@ -1772,15 +1896,19 @@ just::main;
 usage if !@ARGV;
 
 my $template=$t_short;
-if ($ARGV[0] eq '--' or $ARGV[0] eq '--short') { }
+my $sub;
+if ($ARGV[0] eq '--' or $ARGV[0] eq '--short') {}
+elsif ($ARGV[0] eq '--xml') { $sub=\&print_xml; shift @ARGV }
+elsif ($ARGV[0] eq '--yaml') { $sub=\&print_yaml; shift @ARGV }
 elsif ($ARGV[0] eq '--long') { $template=$t_long; shift @ARGV }
 elsif ($ARGV[0] eq '--tex') { $template=$t_tex; shift @ARGV }
 elsif ($ARGV[0] eq '--template') { usage if @ARGV<2; $template=$ARGV[1]; splice @ARGV, 0, 2 }
-elsif ($ARGV[0]=~/\A--/) { usage }
+elsif ($ARGV[0] eq '-h' or $ARGV[0] eq '--help') { usage() }
+elsif ($ARGV[0] eq '-') {}
+elsif ($ARGV[0]=~/\A-/) { usage() }
 
-my $sub=compile_template($template);
+$sub=compile_template($template) if !defined $sub;
 for my $filename (@ARGV) { work $sub, $filename }
-
 __END__
 
 =begin man
@@ -1817,8 +1945,8 @@ C<B<img_bbox.pl>>
 =head1 DESCRIPTION
 
 img_bbox.pl is a standalone Perl script that can detect file format,
-width, height, bounding box and
-other meta-information from image files. Supported vector formats are:
+width, height, bounding box and other meta-information from image files.
+Supported vector formats are:
 PDF, Flash SWF, EPS, PS, DVI and FIG. Supported raster image formats are:
 GIF, JPEG, PNG, TIFF, XPM, XBM1, XBM, PNM, PBM, PGM, PPM, PCX, LBM, other
 IFF, Windows and OS/2 BMP, MIFF, Gimp XCF, Windows ICO, Adobe PSD, FBM,
@@ -1847,7 +1975,7 @@ that img_bbox.pl was able to detect.
 writes output suitable for C<\input> in TeX. The file name, file format and
 bounding box is dumped
 
-=item C<--pat>
+=item C<--template>
 
 lets the user specify an individual pattern, see later.
 
@@ -1855,11 +1983,13 @@ lets the user specify an individual pattern, see later.
 
 =head1 PATTERNS
 
-Individual patterns can be specified after C<--pat>. Built-in patterns are:
+Individual patterns can be specified after C<--template>. Built-in patterns are:
 
- --short: %{FileName} %{FileFormat:-??} %{LLX:-??} %{LLY:-??} %{URX:-??} %{URY:-??}%{Paper?+ %{Paper}}%{Error?+ error:%{Error}}%{n}
- --long : %{FileName}%{FileName?0}%{n}%{all}
- --tex  : \graphicPmeta{%{FileName:t}%{c}{%{FileFormat:-?}%{c}{%{LLX:-?}%{c}{%{LLY:-?}%{c}{%{URX:-?}%{c}{%{URY:-?}%{c}%{n}
+ --short : %{FileName} %{FileFormat:-??} %{LLX:-??} %{LLY:-??} %{URX:-??} %{URY:-??}%{Paper?+ %{Paper}}%{Error?+ error:%{Error}}%{n}
+ --long  : %{FileName}%{FileName?0}%{n}%{all}
+ --tex   : \graphicPmeta{%{FileName:t}%{c}{%{FileFormat:-?}%{c}{%{LLX:-?}%{c}{%{LLY:-?}%{c}{%{URX:-?}%{c}{%{URY:-?}%{c}%{n}
+ --xml   cannot be specified as pattern
+ --yaml  cannot be specified as pattern
 
 Expressions of the form
  C<%{> I<key> [ I<quoting> ] I<method> I<body> C<}>
