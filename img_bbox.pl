@@ -485,8 +485,12 @@ sub img_bbox($) {
     #>24	belong		2		raw colormap
     #>28	belong		>0		colormap is %d bytes long
   } elsif (substr($head,0,4)eq"\xf1\x00\40\xbb") {
-    $bbi->{FileFormat}='CMUWM'; # from xloadimage
+    $bbi->{FileFormat}='CMUWM'; # from xloadimage; untested
     ($dummy,$bbi->{URX},$bbi->{URY},$bbi->{"Info.depth"})=unpack("NNNn",$head);
+  } elsif (substr($head,0,4) eq "\361\0\100\273") { # CMU window manager raster image data
+    # from xvl untested
+    $bbi->{FileFormat}='CMUWM';
+    ($dummy,$bbi->{URX},$bbi->{URY},$bbi->{'Info.num_bits'})=unpack("VVVV",$head);
   } elsif (substr($head,0,2)eq"\x52\xCC") { # Utah Raster Toolkit RLE images; untested
     $bbi->{FileFormat}='RLE'; # from xloadimage
     ($dummy,$bbi->{URX},$bbi->{URY},$bbi->{LLX},$bbi->{LLY})=unpack("A6vvvv",$head);
@@ -608,12 +612,17 @@ sub img_bbox($) {
     #>32	string	COMPLEX		\b, 64 bits = VAX quadword = Fortran COMPLEX*8
     ## VICAR label file
     #43	string	SFDU_LABEL	VICAR label file
-  } elsif (substr($head,0,4) eq "\361\0\100\273") { # CMU window manager raster image data; untested
-    $bbi->{FileFormat}='CMU';
-    ($dummy,$bbi->{URX},$bbi->{URY},$bbi->{'Info.num_bits'})=unpack("VVVV",$head);
   } elsif (substr($head,0,4) eq "IT01" or substr($head,0,4) eq "IT02") { # untested
     $bbi->{FileFormat}='FIT'; # do not cunfuse FIT and FITS
     ($dummy,$bbi->{URX},$bbi->{URY},$bbi->{'Info.num_bits'})=unpack("NNNN",$head);
+  } elsif (substr($head,0,4) eq "#FIG") {
+    $bbi->{FileFormat}='FIG';
+    $bbi->{SubFormat}=$1 if $head=~/\A....[ \t]+(\S+)/s;
+    ## FIG (Facility for Interactive Generation of figures), an object-based format
+    ## (as handled by xfig). There is no size information, fig2dev saves bounding
+    ## box as EPS
+    #0	string		#FIG		FIG image text
+    #>5	string		x		\b, version %.3s
 
 ## These file formats below are known to the Debian potato file(1) command,
 ## but the magic(5) file doesn't tell us how to extract size information
@@ -632,11 +641,6 @@ sub img_bbox($) {
 #>4	long		2		\b, rectangular 8-bit with colormap
 #>4	long		3		\b, rectangular 32-bit (24-bit with matte)
 #
-## FIG (Facility for Interactive Generation of figures), an object-based format
-## (as handled by xfig). There is no size information, fig2dev saves bounding
-## box as EPS
-#0	string		#FIG		FIG image text
-#>5	string		x		\b, version %.3s
 #
 ## PHIGS
 #0	string		ARF_BEGARF		PHIGS clear text archive
@@ -751,10 +755,10 @@ sub img_bbox($) {
     # ^^^ Dat: regexp match is quite weak; perform check last
     $bbi->{FileFormat}='Faces'; # from xloadimage
     $bbi->{URX}=$1+0; $bbi->{URY}=$2+0; $bbi->{"Info.bitdepth"}=$3+0;
-  } elsif ($head=~/\A\1\0/s) { # really weak
+  } elsif ($head=~/\A\001\0/s) { # really weak
     $bbi->{FileFormat}='G3';
     $bbi->{SubFormat}='MSBfirst.bytepad';
-  } elsif ($head=~/\A\0\1/s) { # really weak
+  } elsif ($head=~/\A\0\001/s) { # really weak
     $bbi->{FileFormat}='G3';
     $bbi->{SubFormat}='LSBfirst.bytepad';
   } elsif ($head=~/\A\24\0/s) { # really weak
