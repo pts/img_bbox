@@ -323,6 +323,7 @@ sub calc($) {
       goto IOerr if !defined($tag=getc($F)) or ord($tag)!=255;
       1 while defined($tag=getc($F)) and 255==($tag=ord($tag));
       goto IOerr if !defined($tag);
+      ##printf "0x%02x\n", $tag;
       if ($tag==0xC0) { # SOF0 marker: Baseline JPEG file
         $bbi->{SubFormat}='Baseline';
         goto IOerr if 2!=read $F, $w, 2;
@@ -335,8 +336,20 @@ sub calc($) {
         goto SYerr if ($dummy-=6)!=3*$cpp or $cpp>6 or $cpp<1;
         $bbi->{'Info.hvs'}=vec($w,7,8); # HVSamples ?
         $id_rgb=1 if $cpp==3 and $w=~/\A......R..G..B/s;
-      } elsif (0xC1<=$tag and $tag<=0xCF and $tag!=0xC4 and $tag!=0xC8) { # SOFn
+      } elsif (0xC1<=$tag and $tag<=0xCF and $tag!=0xC4 and $tag!=0xC8 and $tag!=0xCC) { # SOFn
         $bbi->{Subformat}="SOF".($tag-0xC0);
+        goto IOerr if 2!=read $F, $w, 2;
+        # vvv BUGFIX at Sat Dec 20 21:55:43 CET 2003
+        $dummy=unpack('n',$w)-2; # length includes itself
+        goto IOerr if $dummy<5 or $dummy!=read($F, $w, $dummy);
+        $bbi->{BitsPerSample}=vec($w,0,8);
+        $bbi->{URY}=(vec($w,1,8)<<8)|vec($w,2,8);
+        $bbi->{URX}=(vec($w,3,8)<<8)|vec($w,4,8);
+        $cpp=vec($w,5,8);
+        if (!(($dummy-=6)!=3*$cpp or $cpp>6 or $cpp<1)) {
+          $bbi->{'Info.hvs'}=vec($w,7,8) if length($w)>7; # HVSamples ?
+          $id_rgb=1 if $cpp==3 and $w=~/\A......R..G..B/s;
+        }
         last
       } elsif ($tag==0xD9 or $tag==0xDA) { # EOI or SOS marker; we're almost done
         if (!defined $cpp) {
