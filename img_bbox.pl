@@ -11,13 +11,15 @@ eval '(exit $?0)' && eval 'PERL_BADLANG=x;PATH="$PATH:.";export PERL_BADLANG\
 # by pts@fazekas.hu at Sat Dec  7 21:31:01 CET 2002
 #
 # img_bbox.pl is a standalone Perl script that can detect file format,
-# width, height, bounding box and
-# other meta-information from image files. Supported vector formats are:
+# width, height, bounding box and other meta-information from image files.
+# Supported vector formats are:
 # PDF, Flash SWF, EPS, PS, DVI and FIG. Supported raster image formats are:
 # GIF, JPEG, PNG, TIFF, XPM, XBM1, XBM, PNM, PBM, PGM, PPM, PCX, LBM, other
 # IFF, Windows and OS/2 BMP, MIFF, Gimp XCF, Windows ICO, Adobe PSD, FBM,
 # SunRaster, CMUWM, Utah RLE, Photo CD PCD, XWD, GEM, McIDAS, PM, SGI IRIS,
 # FITS, VICAR, PDS, FIT, Fax G3, Targa TGA and Faces.
+# Detecting 10 video and 8 audio file formats (and using mplayer(1) to report
+# parameters such as video dimensions) are also supported.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -2124,17 +2126,88 @@ sub print_yaml($) {
   # "\n" # Dat: this is not part of the YAML; additional whitespace is OK
 }
 
-sub work($$) {
-  my($sub,$filename)=@_;
+sub work($$;$) {
+  my($sub,$filename,$use_mplayer)=@_;
   my $bbi;
   # die "$0: $filename: $!\n" unless open F, "< $filename";
 
   my($FileMagic,$Description)=Htex::Magic::detect_magic($filename);
-  if (open F, "< $filename") {
-    ## print STDERR "$filename\n";
-    $bbi=calc(\*F);
-  } else {
-    $bbi->{Error}="open: $!"
+  if ($use_mplayer and (substr($FileMagic,0,6)eq'video.' or substr($FileMagic,0,6)eq'audio.')) {
+    $bbi={'FileFormat'=>substr($FileMagic,6)};
+    my $MYDIR=$0;
+    $MYDIR="." if $MYDIR!~s@/+[^/]+\Z(?!\n)@@;
+    my @exes=qw(midentifier mplayer mplayer.static mplayer.chan);
+    my $gotexe;
+    for my $exe (@exes) { if (-x"$MYDIR/$exe") { $gotexe="$MYDIR/$exe"; last }}
+    if (!defined$gotexe and defined $ENV{PATH}) {
+      DIR: for my $dir (split/:+/,$ENV{PATH}) {
+        for my $exe (@exes) { if (-x"$dir/$exe") { $gotexe="$dir/$exe"; last DIR}}
+      }
+    }
+    if (defined $gotexe) {
+      my $result=readpipe(shq($gotexe).
+        " -identify -noautosub -vo null -ao null -frames 0 -- ".
+	shq($filename)." 2>&1");
+# Dat: example:
+# ...
+# Playing ./rg/misc.vid/tv_Furore002.avi.
+# AVI file format detected.
+# ID_VIDEO_ID=0
+# ID_AUDIO_ID=1
+# VIDEO:  [DX50]  352x264  24bpp  25.000 fps  2427.4 kbps (296.3 kbyte/s)
+# ==========================================================================
+# Requested audio codec family [mp3] (afm=mp3lib) not available.
+# Enable it at compilation.
+# Opening audio decoder: [ffmpeg] FFmpeg/libavcodec audio decoders
+# AUDIO: 22050 Hz, 1 ch, 16 bit (0x10), ratio: 4000->44100 (32.0 kbit)
+# Selected audio codec: [ffmp3] afm:ffmpeg (FFmpeg MPEG layer-3 audio decoder)
+# ==========================================================================
+# ID_FILENAME=./rg/misc.vid/tv_Furore002.avi
+# ID_VIDEO_FORMAT=DX50
+# ID_VIDEO_BITRATE=2427384
+# ID_VIDEO_WIDTH=352
+# ID_VIDEO_HEIGHT=264
+# ID_VIDEO_FPS=25.000
+# ID_VIDEO_ASPECT=0.0000
+# ID_AUDIO_CODEC=ffmp3
+# ID_AUDIO_FORMAT=85
+# ID_AUDIO_BITRATE=32000
+# ID_AUDIO_RATE=22050
+# ID_AUDIO_NCH=1
+# ID_LENGTH=17
+# ==========================================================================
+# Opening video decoder: [ffmpeg] FFmpeg's libavcodec codec family
+# Selected video codec: [ffodivx] vfm:ffmpeg (FFmpeg MPEG-4)
+# ==========================================================================
+# Checking audio filter chain for 22050Hz/1ch/16bit -> 22050Hz/2ch/16bit...
+# AF_pre: af format: 2 bps, 1 ch, 22050 hz, little endian signed int 
+# AF_pre: 22050Hz 1ch Signed 16-bit (Little-Endian)
+# AO: [null] 22050Hz 2ch Signed 16-bit (Little-Endian) (2 bps)
+# Building audio filter chain for 22050Hz/1ch/16bit -> 22050Hz/2ch/16bit...
+      $bbi->{FileFormatMPlayer}=$1 if$result=~/^(.*) file format detected[.]$/m;
+      while ($result=~/^ID_([A-Z0-9_]+)=(.*)$/mg) {
+        if ($1 eq "FILENAME") {}
+	elsif ($1 eq'VIDEO_WIDTH' ) { $bbi->{URX}=$2 }
+	elsif ($1 eq'VIDEO_HEIGHT') { $bbi->{URY}=$2 }
+	elsif ($1 eq'LENGTH') { $bbi->{Duration}=$2 } # Dat: in seconds, integer
+	elsif (substr($1,0,6)eq"VIDEO_") { $bbi->{"Video.".substr($1,6)}=$2 }
+	elsif (substr($1,0,6)eq"AUDIO_") { $bbi->{"Audio.".substr($1,6)}=$2 }
+	else { $bbi->{"Info.$1"}=$2 }
+      }
+      ## die $result;
+    }
+    if (defined $bbi->{URX} and defined $bbi->{URY}) {
+      $bbi->{LLX}=$bbi->{LLY}=0
+    } else {
+      delete $bbi->{URX}; delete $bbi->{URY};
+    }
+  } else {  
+    if (open F, "< $filename") {
+      ## print STDERR "$filename\n";
+      $bbi=calc(\*F);
+    } else {
+      $bbi->{Error}="open: $!"
+    }
   }
   if ($bbi->{FileFormat} eq 'unknown' and
     $FileMagic ne 'unknown' and
@@ -2172,7 +2245,7 @@ sub usage() {
 This program is free software, licensed under the GNU GPL.
 This software comes with absolutely NO WARRANTY. Use at your own risk!
 
-Usage: $0 [<template>] <filename.image> [...]
+Usage: $0 [<template>] [--mplayer] <filename.image> [...]
 Template is one of: --  --short  --long  --tex  --xml --yaml  --template <t>
 
 I can detect file format, width, height, bounding box and other
@@ -2188,18 +2261,20 @@ usage if !@ARGV;
 
 my $template=$t_short;
 my $sub;
+my $use_mplayer=0;
 if ($ARGV[0] eq '--' or $ARGV[0] eq '--short') {}
 elsif ($ARGV[0] eq '--xml') { $sub=\&print_xml; shift @ARGV }
 elsif ($ARGV[0] eq '--yaml') { $sub=\&print_yaml; shift @ARGV }
 elsif ($ARGV[0] eq '--long') { $template=$t_long; shift @ARGV }
 elsif ($ARGV[0] eq '--tex') { $template=$t_tex; shift @ARGV }
 elsif ($ARGV[0] eq '--template') { usage if @ARGV<2; $template=$ARGV[1]; splice @ARGV, 0, 2 }
+elsif ($ARGV[0] eq '--mplayer') { $use_mplayer=1; shift @ARGV }
 elsif ($ARGV[0] eq '-h' or $ARGV[0] eq '--help') { usage() }
 elsif ($ARGV[0] eq '-') {}
 elsif ($ARGV[0]=~/\A-/) { usage() }
 
 $sub=compile_template($template) if !defined $sub;
-for my $filename (@ARGV) { work $sub, $filename }
+for my $filename (@ARGV) { work $sub, $filename, $use_mplayer }
 __END__
 
 =begin man
@@ -2231,6 +2306,7 @@ C<B<img_bbox.pl>>
  S<| C<--long>>
  S<| C<--tex>>
  S<| C<--template> I<template> ]>
+ S<[ C<--mplayer> ]>
  S<I<filename.image>> S<[ ... ]>
 
 =head1 DESCRIPTION
@@ -2243,6 +2319,8 @@ GIF, JPEG, PNG, TIFF, XPM, XBM1, XBM, PNM, PBM, PGM, PPM, PCX, LBM, other
 IFF, Windows and OS/2 BMP, MIFF, Gimp XCF, Windows ICO, Adobe PSD, FBM,
 SunRaster, CMUWM, Utah RLE, Photo CD PCD, XWD, GEM, McIDAS, PM, SGI IRIS,
 FITS, VICAR, PDS, FIT, Fax G3, Targa TGA and Faces.
+Detecting 10 video and 8 audio file formats (and using mplayer(1) to report
+parameters such as video dimensions) are also supported.
 
 img_bbox.pl writes the detected information to STDOUT, in a format
 determined by the template specified on the command line. The default
@@ -2269,6 +2347,10 @@ bounding box is dumped
 =item C<--template>
 
 lets the user specify an individual pattern, see later.
+
+=item C<--mplayer>
+
+runs mplayer to get media parameters of audio and video files.
 
 =back
 
