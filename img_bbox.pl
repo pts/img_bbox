@@ -1642,14 +1642,7 @@ package Htex::img_bbox;
 # by pts@fazekas.hu at Sat Dec  7 21:31:01 CET 2002
 # JustLib2 at Sat Dec 21 21:29:21 CET 2002
 #
-# img_bbox.pl is a standalone Perl script that can extract file format,
-# width, height, bounding box and
-# other meta-information from image files. Supported vector formats are:
-# PDF, Flash SWF, EPS, PS, DVI and FIG. Supported raster image formats are:
-# GIF, JPEG, PNG, TIFF, XPM, XBM1, XBM, PNM, PBM, PGM, PPM, PCX, LBM, other
-# IFF, Windows and OS/2 BMP, MIFF, Gimp XCF, Windows ICO, Adobe PSD, FBM,
-# SunRaster, CMUWM, Utah RLE, Photo CD PCD, XWD, GEM, McIDAS, PM, SGI IRIS,
-# FITS, VICAR, PDS, FIT, Fax G3, Targa TGA and Faces.
+# See perldoc(1) docs below.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
