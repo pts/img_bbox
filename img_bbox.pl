@@ -243,6 +243,10 @@ sub calc($) {
     $bbi->{FileFormat}='XBM';
     $bbi->{URX}=0+$2;
     $bbi->{URY}=0+$1;
+  } elsif (substr($head,0,8) eq "JG\004\016\0\0\0\0") {
+    # vvv AOL browser proprietary lossy compressed raster image format,
+    # supported only by the AOL browser and Internet Explorer
+    $bbi->{FileFormat}='ART';
   } elsif ($head=~m@\AP([1-6])[\s#]@) { # PNM
     $bbi->{FileFormat}='PNM';
     my @subformats=qw{- PBM.text PGM.text PPM.text PBM.raw PGM.raw PPM.raw};
