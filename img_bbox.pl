@@ -156,7 +156,8 @@ sub pdf_rewrite($;$) {
       return $RET if $P and ($T eq "stream" or $T eq "endobj" or $T eq "startxref");
       next
     } elsif ($O==11) { # `>'
-      return undef if vec($S,++$I,8)!=62; # err(">> expected");
+      return "" if ++$I==$L; # only `>' has arrived
+      return undef if vec($S,$I,8)!=62; # err(">> expected");
       $RET.=" >>";
     } elsif ($O==16) { # string
       my $T="";
@@ -223,7 +224,10 @@ sub pdf_rewrite($;$) {
 #die unless pdf_rewrite('(hel\)lo\n\bw(or)ld)') eq ' (hel\051lo\012\010w\050or\051ld)';
 #die unless pdf_rewrite('(hel\)lo\n\bw(orld)') eq '';
 #die unless pdf_rewrite('[ (hel\)lo\n\bw(or)ld)>>') eq ' [ (hel\051lo\012\010w\050or\051ld) >>';
-#die unless !defined pdf_rewrite('>');
+#die unless pdf_rewrite('>') eq "";
+#die unless pdf_rewrite('<') eq "";
+#die unless pdf_rewrite('< ') eq "";
+#die unless !defined pdf_rewrite('< <');
 #die unless !defined pdf_rewrite('> >');
 #die unless pdf_rewrite('[ (hel\)lo\n\bw(or)ld) <') eq "";
 #die unless pdf_rewrite("<\n3\t1\r4f5C5 >]") eq ' (1O\134P) ]';
@@ -235,20 +239,7 @@ sub pdf_rewrite($;$) {
 #die unless pdf_rewrite('%hello') eq '';
 #die unless pdf_rewrite("alma\n%korte\n42") eq ' alma 42';
 #die unless pdf_rewrite('/Size 42') eq ' /Size 42';
-
-#die pdf_rewrite('
-#alma
-#0000012341 00000 n
-#0000026989 00000 n
-#trailer
-#<<
-#/Size 38131
-#/Info 37444 0 R
-#/Root 37550 0 R
-#/Prev 7020615
-#/ID[<16576b7a7b963d75f7a70b3c3d78455c><16576b7a7b963d75f7a70b3c3d78455c>]
-#>>
-#startxref',0);
+#die "OK";
 
 #** Reads a single PDF indirect object (without its stream) from a PDF file.
 #** Does some trivial transformations on it to make later regexp matching
@@ -257,7 +248,7 @@ sub pdf_rewrite($;$) {
 #**   file to the beginning of the object data (i.e just before `5 0 obj')
 #** @return string containing PDF source code, or undef on error
 sub pdf_read_obj($) {
-  my $F=$_[0];  my $L=1;  my $M;  my $S="";  my $RET; # !!
+  my $F=$_[0];  my $L=1;  my $M;  my $S="";  my $RET; # !! $L=1
   while (1) { # read as much data as necessary
     return undef if 0>($M=read $F, $S, $L, length($S));
     $RET=pdf_rewrite($S,1);
@@ -277,60 +268,161 @@ sub pdf_read_obj($) {
   #)@gx
 }
 
-#** @param $_[0] a filehandle (e.g \*STDIN), containing a PDF file
-#** @param $_[1] an xref table: $_[1][4][56] is the file offset of object 56
-#**   from generation 4
-#** @param $_[2] a PDF source string (rewritten by pdf_rewrite()), possibly
-#**   containing indirect object references (e.g `56 4 R')
-#** @return a rewritten PDF source string, with references resolved, or undef
-sub pdf_resolve($$$) {
-  my $F=$_[0];
-  my $XREF=$_[1];
-  my $S=$_[2];
-  my $T;
-  my $P;
-  # Imp: disallow `stream' in most cases
-  # 1 while # one iteration only
-  $S=~s` (\d+) (\d+) R\b`
-    return undef unless ref $XREF->[$2+0] and defined ($P=$XREF->[$2+0][$1+0]);
-    return undef unless seek $F, $P, 0;
-    return undef unless defined($T=pdf_read_obj($F));
-    return undef unless $T=~s@\A (\d+) (\d+) obj\b(.*) (endobj|stream)\Z(?!\n)@$3@s;
-#    die $T;
-#    return undef unless $T=~s@\A (\d+) (\d+) obj\b(.*) (endobj|stream)@$3@s;
-#    die $T;
-    $T
-  `ge;
-  # die defined $S;
-  $S
-}
-
 #** @param $_[0] a filehandle (e.g \*STDIN), containing a PDF file, positioned
 #**  just before an `xref' table
 #** @param $_[1] an xref table: $_[1][4][56] is the file offset of object 56
 #**   from generation 4; will be extended
 #** @return the `trailer' section after the `xref'; or undef
 sub pdf_read_xref($$) {
+  # made much faster at Wed Dec 18 09:50:23 CET 2002
   my $T;
+  my $E;
   my $F=$_[0];
   my $XREF=$_[1];
-  return undef unless defined($T=pdf_read_obj($F));
-  return undef unless $T=~s@\A xref (\d+) (\d+)@@;
-  my($first,$len)=($1+0,$2+0);
-  return undef unless $T=~s@ trailer( .*) startxref\Z(?!\n)@@s;
-  my $RET=$1;
-  my $lasT=0;
-  while ($T=~/\G (\d+) (\d+) ([nf])/gm) {
-    ## print "Z $first\n";
-    $XREF->[$2+0][$first]=$1+0 if $3 eq 'n';
-    $lasT=pos($T); $first++;
+  return undef if 8>read $F, $T, 1024;
+  return undef unless $T=~s@\A\s*xref\s+(\d+)\s+(\d+)\s+(?=\S)@@;
+  my ($first,$len,$flen);
+  while (1) {
+    ($first,$len)=($1+0,$2+0);
+    ## print " $first + $len\n";
+    $flen=($len*=20)-length($T)+20;
+    return undef unless $flen<1 or $flen==read $F, $T, $flen, length($T);
+    for (my $I=0;$I<$len;$I+=20, $first++) {
+      $E=substr($T, $I, 20);
+      return undef unless $E=~/\A(\d{10})\s(\d{5})\s([nf])\s\s/;
+      ## print "($1 $2 $3)\n";
+      $XREF->[$2+0][$first]=$1+0 if $3 eq 'n';
+    }
+    $E=substr($T, $len);
+    last if $E!~s@\A\s*(\d+)\s*(\d+)\s+(?=\S)@@; # next section
+    $T=$E;
   }
-  # Imp: check len
-  return undef unless $lasT==length($T); # read full xref table
-  $RET
+  
+  # die(-length($T)+$len);
+  ## die tell($F);
+  return undef if length($T)!=$len and !seek $F, -length($T)+$len, 1;
+  ## die tell($F);
+  return undef unless defined($T=pdf_read_obj($F));
+  $XREF->[0][0]=undef if defined $XREF->[0];
+  $XREF->[0][0]=$1+0 if $T=~m@ /Prev (\d+)@; # remember /Prev xref table
+  return undef unless $T=~m@\A trailer( .*) startxref\Z(?!\n)@s;
+  $1
 }
 
-# die pdf_read_obj \*STDIN;
+my $pdf_last_ref0=0;
+#** @param $_[0] a filehandle (e.g \*STDIN), containing a PDF file
+#** @param $_[1] an xref table: $_[1][4][56] is the file offset of object 56
+#**   from generation 4
+#** @param $_[2] an object number
+#** @param $_[3] a generation number
+#** @return PDF source code of the reference, or undef
+sub pdf_ref($$$$) {
+  my $F=$_[0]; my $XREF=$_[1]; my $ON=$_[2]+0; my $GN=$_[3]+0;
+  my $T;
+  $pdf_last_ref0=$ON if $GN==0;
+  ## print "REF $ON $GN;\n";
+  until (ref $XREF->[$GN] and defined ($T=$XREF->[$GN][$ON])) {
+    return undef if !ref $XREF->[0] or !defined $XREF->[0][0]; # no /Prev entry, `$ON $GN R' not found
+    return undef unless seek $F, $XREF->[0][0], 0;
+    return undef if !defined pdf_read_xref($F,$XREF);
+  }
+  ## print "REF at $T;\n";
+  return undef unless seek $F, $T, 0;
+  return undef unless defined($T=pdf_read_obj($F));
+  ## print "REF=($T);\n";
+  return undef unless $T=~s@\A (\d+) (\d+) obj\b(.*) (endobj|stream)\Z(?!\n)@$3@s;
+  $T
+}
+
+#** Gets a key from a direct dict, and resolves it if it is an indirect object
+#** @param $_[0] a filehandle (e.g \*STDIN), containing a PDF file
+#** @param $_[1] an xref table: $_[1][4][56] is the file offset of object 56
+#**   from generation 4
+#** @param $_[2] a PDF source dict (`<< ... >>') or array
+#** @param $_[3] a key (`/...')
+sub pdf_get($$$$) {
+  # Imp: array gets
+  my $F=$_[0]; my $XREF=$_[1]; my $S=$_[2]; my $KEY=$_[3]; my $POS=0;
+  my $DEPTH=0; my $IS_DICT; my $C=0; my $N=0;
+  ## print "\n";
+  while ($S=~/\G (\S+)/g) {
+    $C=vec($1,0,8);  $POS=pos($S);
+    ## print "($1) $DEPTH $N\n";
+    if ($1 eq '>>' or $1 eq ']') {
+      return undef if 0==$DEPTH--;
+      last if !$DEPTH;
+      $N++ if 1==$DEPTH; # !! $N=0
+    }
+    elsif ($DEPTH==1 and !$IS_DICT and $KEY==$N) { $POS=pos($S)-=length($1)+1; goto do_ret }
+    elsif ($1 eq '<<') { $IS_DICT=1 if 0==$DEPTH++ }
+    elsif ($1 eq '[') {
+      if (0==$DEPTH++) {
+        $IS_DICT=0;
+        return undef if $KEY!~/\A(\d+)\Z(?!\n)/; # err("non-numeric key in array")
+      }
+    }
+    elsif (0==$DEPTH) { return undef } # not in a composite object
+    elsif (1!=$DEPTH) { next }
+    elsif (!$IS_DICT) { $N++ }
+    elsif ($C==40) { $N++ } # `(': string or bare name
+    elsif ($C>=47 and $C<=57) { # '/': /name 0..9: number
+      ## print "TRY ($1) KEY=$KEY.\n";
+      next if ($N++&1)==1 or $1 ne $KEY;
+     do_ret:
+      ## print substr($S,pos($S)),";;\n";
+      return pdf_ref $F, $XREF, $1, $2 if $S=~/\G (\d+) (\d+) R\b/gc;
+      ## print substr($S,pos($S)),"::\n";
+      $DEPTH=0;
+      while ($S=~/\G( \S+)/g) {
+        if ($1 eq ' <<' or $1 eq ' [') { $DEPTH++ }
+        elsif ($1 eq ' >>' or $1 eq ' ]') {
+          ## die "($1)\n";
+          return undef if 0==$DEPTH--; # err("nesting")
+          return substr($S,$POS,pos($S)-$POS) if 0==$DEPTH;
+        } elsif ($DEPTH==0) { return $1 }
+      }
+    } else { $N++ } # bare name
+  }
+  return undef if $POS!=length($S); # err("invalid source dict");
+  "" # not found
+}
+
+# Unit test:
+#die unless pdf_get(\*STDIN, 0, ' [ al makorte 42 ]', 0) eq ' al';
+#die unless pdf_get(\*STDIN, 0, ' [ al makorte 42 ]', 1) eq ' makorte';
+#die unless pdf_get(\*STDIN, 0, ' [ al makorte 42 ]', 2) eq ' 42';
+#die unless pdf_get(\*STDIN, 0, ' [ al makorte 42 ]', 3) eq '';
+#die unless pdf_get(\*STDIN, 0, ' [ << >> ]', 0) eq ' << >>';
+#die unless pdf_get(\*STDIN, 0, ' [ << >> ]', 1) eq '';
+#die unless pdf_get(\*STDIN, 0, ' [ << >> [ al makorte 42 ] ]', 1) eq ' [ al makorte 42 ]';
+#die unless pdf_get(\*STDIN, 0, ' << /Alma [ 1 2 ] /Korte [ 3 4 ] >>', '/Korte') eq ' [ 3 4 ]';
+#die unless !defined pdf_get(\*STDIN, 0, ' [ al makorte 42 ]', '/Name');
+#die unless !defined pdf_get(\*STDIN, 0, ' << al makorte 42 >>', 42);
+#die unless pdf_get(\*STDIN, 0, ' << al makorte 42 137 >>', 42) eq ' 137';
+#die unless pdf_get(\*STDIN, 0, ' << al makorte >>', 'al') eq "";
+#die "OK";
+
+#** Reported boxes: /MediaBox /CropBox /BleedBox /TrimBox /ArtBox
+#** @param $_[0] a filehandle (e.g \*STDIN), containing a PDF file
+#** @param $_[1] an xref table: $_[1][4][56] is the file offset of object 56
+#**   from generation 4
+#** @param $_[2] a PDF source dict (`<< ... >>') of /Type/Catalog
+#**   /Type/Pages or /Type/Page
+#** @param $_[3] hashref to update. $_[3]{BleedBox}[2] will be the URX corner
+#**   of the BleedBox
+sub pdf_get_boxes($$$$) {
+  my $F=$_[0]; my $XREF=$_[1]; my $S=$_[2]; my $bbi=$_[3];
+  return if !defined $S;
+  for my $name (qw{MediaBox CropBox BleedBox TrimBox ArtBox}) {
+    my $box=pdf_get($F, $XREF, $S, "/$name");
+    next if !defined $box or !length $box
+         or $box!~m@ \[ ([0-9eE.-]+) ([0-9eE.-]+) ([0-9eE.-]+) ([0-9eE.-]+) \]\Z(?!\n)@
+         or !defined c_numval($1) or !defined c_numval($2) or !defined c_numval($3) or !defined c_numval($4);
+    ($bbi->{LLX},$bbi->{LLY},$bbi->{URX},$bbi->{URY})=($1+0,$2+0,$3+0,$4+0) if $name eq 'MediaBox';
+    $name="Info.$name";
+    ($bbi->{$name}[0],$bbi->{$name}[1],$bbi->{$name}[2],$bbi->{$name}[3])=($1+0,$2+0,$3+0,$4+0);
+  }
+}
 
 # ---
 
@@ -507,59 +599,80 @@ sub img_bbox($) {
   } elsif (substr($head,0,5) eq "%PDF-") {
     $bbi->{FileFormat}='PDF'; # Adobe Portable Document Format
     # Dat: this routine cannot read encrypted PDF files
+    # Dat: example $bbi return: {
+    #        'URY' => 792, 'LLX' => '0', 'LLY' => '0', 'URX' => 612
+    #        'FileFormat' => 'PDF', 'SubFormat' => '1.2', 'Info.linearized' => 1, 'Info.binary' => 'Binary',
+    #        'Info.MediaBox' => [ 0, 0, 612, 792 ],
+    #        'Info.CropBox' => [ 41, 63, 572, 729 ],
+    #      };
+    # Dat: $bbi->{'Info.num_pages'} is not reported for Linearized PDF.
+    # Imp: report much more specific error messages
+    # Imp: better distinguish between IOerr and SYerr
     $bbi->{SubFormat}=$1 if $head=~/\A%PDF-([\d.]+)/;
     $bbi->{'Info.binary'}=($head=~/\A[^\r\n]+[\r\n]+[ -~]*[^\n\r -~]/) ? 'Binary' : 'Clean7Bit';
     # if ($head=~m@\A(?:%[^\r\n]*[\r\n])*.{0,40}/Linearized@s and $head=~m@\A(?:%[^\r\n]*[\r\n])*.{0,200}/O\s+(\d+)@s) {
     $head=pdf_rewrite($head,1);
     my $page1obj;
-    if (defined $head and $head=~m@ /Linearized @ and $head=~m@ /O (\d+)@) {
+    if (defined $head and $head=~m@/Linearized\s+@ and $head=~m@/O\s+(\d+)@) {
       $bbi->{'Info.linearized'}=1;
-      # $page1obj=$bbi->{'Info.page1obj'}=$1+0; ## !! uncomment this
+      $page1obj=$bbi->{'Info.page1obj'}=$1+0;
     } else { $bbi->{'Info.linearized'}=0 }
-    # 1. We seek to EOF and find the beginning of the xref table
-    goto IOerr if !seek $F, -1024, 2;
+    goto IOerr if !seek $F, -1024, 2 and !seek $F, 0, 0;
     goto IOerr if 1>read $F, $head, 1024;
-    goto SYerr if $head!~/startxref\s+(\d+)\s+%%EOF\s+\Z(?!\n)/;
+    goto SYerr if $head!~/startxref\s+(\d+)\s*%%EOF\s*\Z(?!\n)/
+              and $head!~/startxref\s+(\d+)\s*%%EOF/;
+    # ^^^ Dat: some PDF files contain binary junk at the end
     my $xref_ofs=$1+0;
     goto IOerr if !seek $F, $xref_ofs, 0;
     # die pdf_read_obj($F);
     my $xref=[];
     my $trailer=pdf_read_xref($F,$xref);
     goto SYerr if !defined $trailer;
-    my $rootR;
-    if (!defined $page1obj) { # ...
-      goto SYerr if $trailer!~m@ /Root( \d+ \d+ R) @;
-      $rootR=$1;
-      
-      # Read the whole, large xref table
-      while ($trailer=~m@ /Prev (\d+) @) {
-        ## print "prev=$1\n";
-        goto IOerr if !seek $F, $1, 0;
-        goto SYerr if !defined($trailer=pdf_read_xref($F,$xref));
-      }
+    
+    my $pages;
+    my $type;
+    if (!defined $page1obj) {
+      ## die $trailer;
+      ## die pdf_ref($F,$xref,37550,0);
+      ## die pdf_get($F,$xref,$trailer,'/ID');
+      ## die pdf_get($F,$xref,$trailer,'/Root');
+      ## die pdf_get($F,$xref,$trailer,'/Size');
+      ## die pdf_get($F,$xref,$trailer,'/Sizez');
 
-      my $root=pdf_resolve($F, $xref, $rootR);
-      die $root;
-      # Imp: /Pages
-      # Imp: /Kids list etc.
-      # Imp: pdf_resolve_val
-      ## die $xref->[0][37550];
-      ## die $trailer; # /Root
+      my $root=pdf_get($F,$xref,$trailer,'/Root');
+      goto IOerr if !defined $root; goto SYerr if !length $root;
+      $type=pdf_get($F,$xref,$root,'/Type');
+      goto IOerr if !defined $type; goto SYerr if $type ne ' /Catalog';
+      # die $root;
+      # vvv Dat: reading xref for /Pages in a linearized PDF is quite slow
+      $pages=pdf_get($F,$xref,$root,'/Pages');
+      goto IOerr if !defined $pages; goto SYerr if !length $pages;
+      ## die $pages;
+      my $kids;
       
+      while (1) {
+        $type=pdf_get($F,$xref,$pages,'/Type');
+        goto IOerr if !defined $type;
+        last if $type ne ' /Pages';
+        pdf_get_boxes($F, $xref, $pages, $bbi);
+        $kids=pdf_get($F,$xref,$pages,'/Kids');
+        goto IOerr if !defined $kids; goto SYerr if !length $kids;
+        ## die $kids;
+        $pages=pdf_get($F,$xref,$kids,0); # Imp: error return ary[str]
+        ## die $pages;
+        goto IOerr if !defined $pages; goto SYerr if !length $pages;
+      }
+      # Dat: cannot set $page1obj properly here, because it might be a direct object
+      $bbi->{'Info.page1obj'}=$pdf_last_ref0;
+    } else {
+      # die $page1obj;
+      $pages=pdf_ref($F, $xref, $page1obj, 0);
+      goto IOerr if !defined $pages;
+      $type=pdf_get($F,$xref,$pages,'/Type');
+      goto IOerr if !defined $type;
     }
-    my $page1=pdf_resolve($F, $xref, " $page1obj 0 R");
-    goto IOerr if!defined $page1;
-    # my $MediaBox=pdf_resolve_val($F, $xref, $page1, ' /MediaBox ');
-    # die $MediaBox;
-    # Imp: indirect object MediaBox
-    # Imp: CropBox
-    if ($page1=~m@ /MediaBox \[ ([0-9eE.-]+) ([0-9eE.-]+) ([0-9eE.-]+) ([0-9eE.-]+) \]@) {
-      no integer;
-      ($bbi->{LLX},$bbi->{LLY},$bbi->{URX},$bbi->{URY})=($1+0,$2+0,$3+0,$4+0);
-    }    
-    # die $page1;
-    # print Dumper $xref;
-    # Imp: ...
+    goto SYerr if $type ne ' /Page';
+    pdf_get_boxes($F, $xref, $pages, $bbi);
   } elsif (substr($head,0,5) eq "%!PS-") {
     # Dat: the user should not trust Val.languagelevel blindly. There are far
     #      too many PS files hanging around that do not conform to any standard.
