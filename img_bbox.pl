@@ -108,6 +108,231 @@ sub dimen2bp($) {
   $val
 }
 
+# --- PDF helpers
+
+#** @param $_[0] an arbirary binary string
+#** @param $_[1] string containing [^\w.-] chars as octal
+#sub pdf_safe_string($) {
+#  my $S=$_[0];
+#  $S=~s@([^A-Za-z0-9_.-])@sprintf"\\%03o",ord$1@ge;
+#  $S
+#}
+
+my @pdf_classify;
+#** @param $_[0] a string in PDF source format
+#** @return a rewritten string, or "" if $_[0] is truncated, or undef if
+#**   there is a parse error
+sub pdf_rewrite($;$) {
+  my $explicit_term_p=$_[1];
+  my $L=length($_[0]);
+  return "" if $L==0;
+  my $S="$_[0]\n>>  "; # add sentinel
+  my $I=0;
+  my $O;
+  my $RET="";
+  if (!@pdf_classify) {
+    # Dat: PDF whitespace(0) is  [\000\011\012\014\015\040]
+    # Dat: PDF separators(10) are < > { } [ ] ( ) / %
+    # Dat: PDF regular(40) character is any of [\000-\377] which is not whitespace or separator
+    @pdf_classify=(40)x256;
+    @pdf_classify[ord('<'),ord('>'),ord('{'),ord('}'),ord('['),ord(']'),
+      ord('('),ord(')'),ord('/'),ord('%')]=(10,11,12,13,14,15,16,17,18,19);
+    @pdf_classify[000,011,012,014,015,040]=(0,0,0,0,0,0);
+  }
+  while ($I<$L) {
+    $O=$pdf_classify[vec($S,$I,8)];
+    if ($O==0) { # whitespace
+    } elsif (12<=$O and $O<=15) { # one-char token
+      $RET.=" ".substr($S,$I,1);
+    } elsif ($O==18 or $O==40) { # name or /name
+      my $P=0;
+      if ($O==18) { $I++; $RET.=" /" } else { $RET.=" "; $P=1 }
+      my $T="";
+      $T.=chr($O) while $pdf_classify[$O=vec($S,$I++,8)]==40;
+      $I--;
+      ## die $I;
+      $T=~s@([^A-Za-z0-9_.-])@sprintf"#%02x",ord$1@ge; # make name safe
+      $RET.=$T;
+      return $RET if $P and ($T eq "stream" or $T eq "endobj" or $T eq "startxref");
+      next
+    } elsif ($O==11) { # `>'
+      return undef if vec($S,++$I,8)!=62; # err(">> expected");
+      $RET.=" >>";
+    } elsif ($O==16) { # string
+      my $T="";
+      my $depth=1; $I++;
+      while ($I<$L) {
+        $O=vec($S,$I++,8); bcont:
+        ## print chr($O),":$depth\n";
+        if ($O==40) { $depth++ }
+        elsif ($O==41) { last unless --$depth }
+        elsif ($O==92) { # a backslash
+          $O=vec($S,$I++,8);
+          if (48<=$O && $O<=55) {
+            my $P=$O-48; $O=vec($S,$I++,8);
+            if (48<=$O && $O<=55) {
+              my $Q=$O-48; $O=vec($S,$I++,8);
+              if (48<=$O && $O<=55) { $T.=chr(255&($P<<6|$Q<<3|($O-48))) }
+                               else { $T.=chr($P<<3|$Q); goto bcont }
+            } else { $T.=chr($P); goto bcont }
+          } elsif ($O==110) { $O=10 }
+          elsif ($O==114) { $O=13 }
+          elsif ($O==116) { $O=9 }
+          elsif ($O== 98) { $O=8 }
+          elsif ($O==102) { $O=12 }
+        }
+        $T.=chr($O)
+      } # WHILE
+      return "" if $depth; # err("unterminated string")
+      $T=~s@([^A-Za-z0-9_.-])@sprintf"\\%03o",ord$1@ge; # make string safe
+      $RET.=" ($T)"; next
+    } elsif ($O==10) { # hex string
+      $O=vec($S,++$I,8);
+      if ($O==60) { $RET.=" <<"; $I++; next }
+      # parse hexadecimal string
+      my $half=0x100;
+      my $T="";
+      while (1) {
+        1 until $pdf_classify[$O=vec($S,$I++,8)]; # skip whitespace
+        if ($O==62) { $T.=chr($half&0xFF) if $half&0x1000; last } # '>'
+        return undef if $pdf_classify[$O]!=40; # err("unexpected token in hex")
+        if (65<=$O and $O<=70) { $half+=$O-55 }
+        elsif (97<=$O and $O<=102) { $half+=$O-87 }
+        elsif (48<=$O and $O<=57) { $half+=$O-48 }
+        else { return undef } # err("illegal hex digit")
+        if ($half&0x1000) { $T.=chr($half&0xFF); $half=0x100 }
+                     else { $half<<=4 }
+      }
+      $T=~s@([^A-Za-z0-9_.-])@sprintf"\\%03o",ord$1@ge; # make string safe
+      $RET.=" ($T)"; next
+    } elsif ($O==19) { # single-line comment
+      $I++ while ($O=vec($S,$I,8))!=13 && $O!=10;
+      ## print STDERR "I=$I L=$L\n";
+      next
+    } else { return undef } # err("token expected") # $O==11, $O==17
+    $I++
+  } ## WHILE
+  ## print STDERR "XI=$I L=$L\n";
+  # die $explicit_term_p;
+  return "" if $explicit_term_p;
+  ($I>$L) ? "" : $RET
+}
+
+# Unit test:
+#die unless pdf_rewrite("hello \n\t world\n\t") eq " hello world";
+#die unless pdf_rewrite('(hel\)lo\n\bw(or)ld)') eq ' (hel\051lo\012\010w\050or\051ld)';
+#die unless pdf_rewrite('(hel\)lo\n\bw(orld)') eq '';
+#die unless pdf_rewrite('[ (hel\)lo\n\bw(or)ld)>>') eq ' [ (hel\051lo\012\010w\050or\051ld) >>';
+#die unless !defined pdf_rewrite('>');
+#die unless !defined pdf_rewrite('> >');
+#die unless pdf_rewrite('[ (hel\)lo\n\bw(or)ld) <') eq "";
+#die unless pdf_rewrite("<\n3\t1\r4f5C5 >]") eq ' (1O\134P) ]';
+#die unless pdf_rewrite("<\n3\t1\r4f5C5") eq "";
+#die unless !defined pdf_rewrite("<\n3\t1\r4f5C5]>");
+#die unless pdf_rewrite("% he te\n<\n3\t1\r4f5C5 >]endobj<<") eq ' (1O\134P) ] endobj';
+#die unless pdf_rewrite("") eq "";
+#die unless pdf_rewrite("<<") eq " <<";
+#die unless pdf_rewrite('%hello') eq '';
+#die unless pdf_rewrite("alma\n%korte\n42") eq ' alma 42';
+#die unless pdf_rewrite('/Size 42') eq ' /Size 42';
+
+#die pdf_rewrite('
+#alma
+#0000012341 00000 n
+#0000026989 00000 n
+#trailer
+#<<
+#/Size 38131
+#/Info 37444 0 R
+#/Root 37550 0 R
+#/Prev 7020615
+#/ID[<16576b7a7b963d75f7a70b3c3d78455c><16576b7a7b963d75f7a70b3c3d78455c>]
+#>>
+#startxref',0);
+
+#** Reads a single PDF indirect object (without its stream) from a PDF file.
+#** Does some trivial transformations on it to make later regexp matching
+#** easier. Stops at `stream', `endobj' and `startxref'.
+#** @param $_[0] a filehandle (e.g \*STDIN), correctly positioned in the PDF
+#**   file to the beginning of the object data (i.e just before `5 0 obj')
+#** @return string containing PDF source code, or undef on error
+sub pdf_read_obj($) {
+  my $F=$_[0];  my $L=1;  my $M;  my $S="";  my $RET; # !!
+  while (1) { # read as much data as necessary
+    return undef if 0>($M=read $F, $S, $L, length($S));
+    $RET=pdf_rewrite($S,1);
+    ## print "($S)\n";
+    return undef if !defined $RET; # parse error
+    return $RET if length $RET; # OK, found object
+    return undef if $M==0; # cannot read more, reached EOF
+    $L<<=1;
+  }
+  #$S=~m@[\000\011\012\014\015\040]*(
+  #  %[^\r\n]*[\r\n]|
+  #  /?[^\000\011\012\014\015\040<>{}\[\]()/%]*(?=[\000\011\012\014\015\040<>{}\[\]()/%])| # unterminated
+  #  <<|>>|\{|}|\[|]|
+  #  <[a-fA-F0-9\000\011\012\014\015\040]*>| # hex string
+  #  \((?:[^\\()]+|\\[\000-\377])*\)| # literal string, the easy way
+  #  \( # an unfinished string, needs special care
+  #)@gx
+}
+
+#** @param $_[0] a filehandle (e.g \*STDIN), containing a PDF file
+#** @param $_[1] an xref table: $_[1][4][56] is the file offset of object 56
+#**   from generation 4
+#** @param $_[2] a PDF source string (rewritten by pdf_rewrite()), possibly
+#**   containing indirect object references (e.g `56 4 R')
+#** @return a rewritten PDF source string, with references resolved, or undef
+sub pdf_resolve($$$) {
+  my $F=$_[0];
+  my $XREF=$_[1];
+  my $S=$_[2];
+  my $T;
+  my $P;
+  # Imp: disallow `stream' in most cases
+  # 1 while # one iteration only
+  $S=~s` (\d+) (\d+) R\b`
+    return undef unless ref $XREF->[$2+0] and defined ($P=$XREF->[$2+0][$1+0]);
+    return undef unless seek $F, $P, 0;
+    return undef unless defined($T=pdf_read_obj($F));
+    return undef unless $T=~s@\A (\d+) (\d+) obj\b(.*) (endobj|stream)\Z(?!\n)@$3@s;
+#    die $T;
+#    return undef unless $T=~s@\A (\d+) (\d+) obj\b(.*) (endobj|stream)@$3@s;
+#    die $T;
+    $T
+  `ge;
+  # die defined $S;
+  $S
+}
+
+#** @param $_[0] a filehandle (e.g \*STDIN), containing a PDF file, positioned
+#**  just before an `xref' table
+#** @param $_[1] an xref table: $_[1][4][56] is the file offset of object 56
+#**   from generation 4; will be extended
+#** @return the `trailer' section after the `xref'; or undef
+sub pdf_read_xref($$) {
+  my $T;
+  my $F=$_[0];
+  my $XREF=$_[1];
+  return undef unless defined($T=pdf_read_obj($F));
+  return undef unless $T=~s@\A xref (\d+) (\d+)@@;
+  my($first,$len)=($1+0,$2+0);
+  return undef unless $T=~s@ trailer( .*) startxref\Z(?!\n)@@s;
+  my $RET=$1;
+  my $lasT=0;
+  while ($T=~/\G (\d+) (\d+) ([nf])/gm) {
+    ## print "Z $first\n";
+    $XREF->[$2+0][$first]=$1+0 if $3 eq 'n';
+    $lasT=pos($T); $first++;
+  }
+  # Imp: check len
+  return undef unless $lasT==length($T); # read full xref table
+  $RET
+}
+
+# die pdf_read_obj \*STDIN;
+
+# ---
 
 #** May moves the file offset, but only relatively (SEEK_CUR).
 #** @param $_[0] \*FILE
@@ -284,7 +509,56 @@ sub img_bbox($) {
     # Dat: this routine cannot read encrypted PDF files
     $bbi->{SubFormat}=$1 if $head=~/\A%PDF-([\d.]+)/;
     $bbi->{'Info.binary'}=($head=~/\A[^\r\n]+[\r\n]+[ -~]*[^\n\r -~]/) ? 'Binary' : 'Clean7Bit';
-    # 1. We seek to EOF and find the beginning of the xref table.
+    # if ($head=~m@\A(?:%[^\r\n]*[\r\n])*.{0,40}/Linearized@s and $head=~m@\A(?:%[^\r\n]*[\r\n])*.{0,200}/O\s+(\d+)@s) {
+    $head=pdf_rewrite($head,1);
+    my $page1obj;
+    if (defined $head and $head=~m@ /Linearized @ and $head=~m@ /O (\d+)@) {
+      $bbi->{'Info.linearized'}=1;
+      # $page1obj=$bbi->{'Info.page1obj'}=$1+0; ## !! uncomment this
+    } else { $bbi->{'Info.linearized'}=0 }
+    # 1. We seek to EOF and find the beginning of the xref table
+    goto IOerr if !seek $F, -1024, 2;
+    goto IOerr if 1>read $F, $head, 1024;
+    goto SYerr if $head!~/startxref\s+(\d+)\s+%%EOF\s+\Z(?!\n)/;
+    my $xref_ofs=$1+0;
+    goto IOerr if !seek $F, $xref_ofs, 0;
+    # die pdf_read_obj($F);
+    my $xref=[];
+    my $trailer=pdf_read_xref($F,$xref);
+    goto SYerr if !defined $trailer;
+    my $rootR;
+    if (!defined $page1obj) { # ...
+      goto SYerr if $trailer!~m@ /Root( \d+ \d+ R) @;
+      $rootR=$1;
+      
+      # Read the whole, large xref table
+      while ($trailer=~m@ /Prev (\d+) @) {
+        ## print "prev=$1\n";
+        goto IOerr if !seek $F, $1, 0;
+        goto SYerr if !defined($trailer=pdf_read_xref($F,$xref));
+      }
+
+      my $root=pdf_resolve($F, $xref, $rootR);
+      die $root;
+      # Imp: /Pages
+      # Imp: /Kids list etc.
+      # Imp: pdf_resolve_val
+      ## die $xref->[0][37550];
+      ## die $trailer; # /Root
+      
+    }
+    my $page1=pdf_resolve($F, $xref, " $page1obj 0 R");
+    goto IOerr if!defined $page1;
+    # my $MediaBox=pdf_resolve_val($F, $xref, $page1, ' /MediaBox ');
+    # die $MediaBox;
+    # Imp: indirect object MediaBox
+    # Imp: CropBox
+    if ($page1=~m@ /MediaBox \[ ([0-9eE.-]+) ([0-9eE.-]+) ([0-9eE.-]+) ([0-9eE.-]+) \]@) {
+      no integer;
+      ($bbi->{LLX},$bbi->{LLY},$bbi->{URX},$bbi->{URY})=($1+0,$2+0,$3+0,$4+0);
+    }    
+    # die $page1;
+    # print Dumper $xref;
     # Imp: ...
   } elsif (substr($head,0,5) eq "%!PS-") {
     # Dat: the user should not trust Val.languagelevel blindly. There are far
@@ -304,7 +578,8 @@ sub img_bbox($) {
     while ($head=~/^%%([A-Za-z]+):?\s*((?:.*\S)?)/gm) {
       next if $2 ne '(atend)';
       # read additional ADSC comments from the last 1024 bytes of the file
-      goto IOerr if !($dummy=seek $F, -1024, 2); # Dat: seek to EOF
+      goto IOerr if !seek $F, -1024, 2; # Dat: seek to EOF
+      $dummy=tell $F;
       goto IOerr if $dummy<$headlen and $headlen-$dummy!=read $F, $val, $headlen-$dummy;
       goto IOerr if 0>read $F, $val, 1024;
       $val=~s@(?:\r\n|\n\r|[\n\r])@\n@g; # uniformize newlines
@@ -820,6 +1095,7 @@ sub img_bbox($) {
 # my $filename="/home/guests/pts/eg/bssz/szamelmszig_tetelsorA_kidolgozott.php.pdf";
 # my $filename="/home/guests/pts/eg/ele/elovizsga2001.pdf";
 # my $filename="/home/guests/pts/eg/th/lm2.pdf";
+# my $filename="/tmp/PLRM.pdf";
 
 sub work(@) {
   my $filename=$_[0];
