@@ -618,7 +618,8 @@ sub calc($) {
     $bbi->{FileFormat}='LBM';
     ($dummy,$bbi->{URX},$bbi->{URY})=unpack("A20nn",$head);
   } elsif ($head=~/\AFORM....(RGB[8N])/s) { # /etc/magic
-    $bbi->{FileFormat}="IFF.$1";
+    $bbi->{FileFormat}="IFF";
+    $bbi->{SubFormat}=$1;
     # dimension info not available
   } elsif ($head=~/\ABM....\0\0\0\0....[\014-\177]\0\0\0/s) { # PC bitmaps (OS/2, Windoze BMP files)  (Greg Roelofs, newt@uchicago.edu)
     # https://en.wikipedia.org/wiki/BMP_file_format
