@@ -371,7 +371,10 @@ sub calc($) {
   } elsif (substr($head,0,8) eq "\211PNG\r\n\032\n") {
     $bbi->{FileFormat}='PNG';
     goto SYerr if $head!~/\A........\0\0\0[\15-\77]IHDR/s;
-    ($dummy,$bbi->{URX},$bbi->{URY})=unpack("A16NN",$head);
+    # die length $head; # 256
+    ($dummy,$bbi->{URX},$bbi->{URY},$bbi->{BitsPerComponent},
+      $bbi->{"info.ColorType"},$bbi->{"info.Compression"},
+      $bbi->{"info.Filter"},$bbi->{"info.Interlace"})=unpack("A16NNCCCCC",$head);
   } elsif (substr($head,0,5) eq "%PDF-") {
     $bbi->{FileFormat}='PDF'; # Adobe Portable Document Format
     # Dat: this routine cannot read encrypted PDF files
