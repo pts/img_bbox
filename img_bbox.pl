@@ -11,7 +11,8 @@ eval '(exit $?0)' && eval 'PERL_BADLANG=x;PATH="$PATH:.";export PERL_BADLANG\
 #   image files
 # by pts@fazekas.hu at Sat Dec  7 21:31:01 CET 2002
 #
-# Dat: we know most of xloadimage-1.16, all of file(1)-debian-potato, all of sam2p-0.40
+# Dat: we know most of xloadimage-1.16, most of of file(1)-debian-potato,
+#   all of sam2p-0.40, all of xv-3.10
 # Dat: only in xloadimage: g3Ident,        g3Load,        "G3 FAX Image", (hard to identify file format)
 # Dat: only in xloadimage: macIdent,       macLoad,       "MacPaint Image", (stupid, black-white)
 #
@@ -56,7 +57,7 @@ sub get_bits_msb($$$) {
 sub c_floatval($) {
   my $S=$_[0];
   no integer; # very important; has local scope
-  return 0.0+$S if $S=~/\A[+-]?[0-9]*\.[0-9]+(?:[eE][+-]?[0-9]+)?\Z(?!\n)/;
+  return 0.0+$S if $S=~/\A[+-]?(?:[0-9]*\.[0-9]+|[0-9]+\.])(?:[eE][+-]?[0-9]+)?\Z(?!\n)/;
   undef
 }
 
@@ -66,7 +67,7 @@ sub c_floatval($) {
 sub c_numval($) {
   my $S=$_[0];
   no integer; # very important; has local scope
-  return 0+$S if $S=~/\A[+-]?(?:[0-9]*\.[0-9]+(?:[eE][+-]?[0-9]+)?|[0-9]+)\Z(?!\n)/;
+  return 0+$S if $S=~/\A[+-]?(?:[0-9]*\.[0-9]+(?:[eE][+-]?[0-9]+)?|[0-9]+\.?)\Z(?!\n)/;
   undef
 }
 
@@ -108,6 +109,7 @@ sub dimen2bp($) {
   $val
 }
 
+
 #** May moves the file offset, but only relatively (SEEK_CUR).
 #** @param $_[0] \*FILE
 #** @return BBoxInfo
@@ -126,7 +128,6 @@ sub img_bbox($) {
   binmode $F;
   if (0>read $F, $head, 256) { IOerr: $bbi->{Error}="IO: $!"; return $bbi }
   if (length($head)==0) { $bbi->{FileFormat}='Empty'; return $bbi }
-  # Imp: PDF EPS PS rest
   if ($head=~m@\A\s*/[*]\s+XPM\s+[*]/@) { # XPM
     $bbi->{FileFormat}='XPM';
     goto IOerr if !seek $F, -length($head), 1;
@@ -144,12 +145,13 @@ sub img_bbox($) {
     $bbi->{URX}=0+$1;
     goto SYerr if $head!~m@\s+Height=(\d+)@i;
     $bbi->{URY}=0+$1;
-  } elsif ($head=~m@\A\s*#define\s+.*?_width\s+(\d+)\s*#define\s+.*?_height\s+(\d+)\s*@) { # XBM (1)
-    # Imp: recognise a possibly comment in front of #define
+  } elsif ($head=~m@\A(?:/[*].*?[*]/)?\s*#define\s+.*?_width\s+(\d+)\s*#define\s+.*?_height\s+(\d+)\s*@) { # XBM (1)
+    # Dat: this `if' must be after checking XPM
+    # Imp: recognise a longer comment (that does not fit into $head)
     $bbi->{FileFormat}='XBM';
     $bbi->{URX}=0+$1;
     $bbi->{URY}=0+$2;
-  } elsif ($head=~m@\A\s*#define\s+.*?_height\s+(\d+)\s*#define\s+.*?_width\s+(\d+)\s*@) { # XBM (2)
+  } elsif ($head=~m@\A(?:/[*].*?[*]/)?\s*#define\s+.*?_height\s+(\d+)\s*#define\s+.*?_width\s+(\d+)\s*@) { # XBM (2)
     $bbi->{FileFormat}='XBM';
     $bbi->{URX}=0+$2;
     $bbi->{URY}=0+$1;
@@ -278,6 +280,61 @@ sub img_bbox($) {
     $bbi->{FileFormat}='PNG';
     goto SYerr if $head!~/\A........\0\0\0[\15-\77]IHDR/s;
     ($dummy,$bbi->{URX},$bbi->{URY})=unpack("A16NN",$head);
+  } elsif (substr($head,0,5) eq "%PDF-") {
+    $bbi->{FileFormat}='PDF'; # Adobe Portable Document Format
+    # Dat: this routine cannot read encrypted PDF files
+    $bbi->{SubFormat}=$1 if $head=~/\A%PDF-([\d.]+)/;
+    $bbi->{'Info.binary'}=($head=~/\A[^\r\n]+[\r\n]+[ -~]*[^\n\r -~]/) ? 'Binary' : 'Clean7Bit';
+    # 1. We seek to EOF and find the beginning of the xref table.
+    # Imp: ...
+  } elsif (substr($head,0,5) eq "%!PS-") {
+    # Dat: the user should not trust Val.languagelevel blindly. There are far
+    #      too many PS files hanging around that do not conform to any standard.
+    $bbi->{FileFormat}=($head=~/\A[^\n\r]*?\bEPSF-/) ? "EPS" : "PS";
+    goto SYerr if $head!~s@[^\n\r]*[\n\r]+@@;
+    # vvv Dat `+' is `or' with full boolean eval
+    until ($head=~s@[\n\r]%%EndComments.*@@s + $head=~s@[\n\r](?:[^%]|%[^%]).*@@s) {
+      goto IOerr if 0>read $F, $head, 1024, length($head);
+    }
+    my $headlen=length($head);
+    $head=~s@(?:\r\n|\n\r|[\n\r])@\n@g; # uniformize newlines
+    $head=~s@\s*\n%%[+]\s*@ @g; # unify line continuations
+    my %H;
+    my $had_hires=0; # HiresBoundingBox overrides normal
+    my $val;
+    while ($head=~/^%%([A-Za-z]+):?\s*((?:.*\S)?)/gm) {
+      next if $2 ne '(atend)';
+      # read additional ADSC comments from the last 1024 bytes of the file
+      goto IOerr if !($dummy=seek $F, -1024, 2); # Dat: seek to EOF
+      goto IOerr if $dummy<$headlen and $headlen-$dummy!=read $F, $val, $headlen-$dummy;
+      goto IOerr if 0>read $F, $val, 1024;
+      $val=~s@(?:\r\n|\n\r|[\n\r])@\n@g; # uniformize newlines
+      $val=~s@\s*\n%%[+]\s*@ @g; # unify line continuations
+      $val=~s@^(?:[^%]|%[^%]).*\n?@@mg; # remove non-DSC lines
+      # vvv Dat: appending is schemantically correct here
+      $head.="\n$val"; last
+    }
+    while ($head=~/^%%([A-Za-z]+):?[ \t]*((?:.*\S)?)/gm) { # iterate over Adobe DSC comments
+      $dummy=lc($1); $val=$2;
+      next if $dummy eq 'enddata' or $dummy eq 'trailer' or $dummy eq 'eof';
+      $bbi->{"Val.$dummy"}=$2;
+      if ($dummy eq 'documentdata') {
+        $dummy=lc($2);
+        $bbi->{'Info.binary'}='Clean7Bit' if $dummy eq 'clean7bit';
+        $bbi->{'Info.binary'}='Clean8Bit' if $dummy eq 'clean8bit';
+        $bbi->{'Info.binary'}='Binary' if $dummy eq 'binary';
+      } elsif ($dummy eq 'boundingbox' and $val=~/\A([+-]?\d+)\s+([+-]?\d+)\s+([+-]?\d+)\s+([+-]?\d+)\Z(?!\n)/) {
+        ($bbi->{LLX},$bbi->{LLY},$bbi->{URX},$bbi->{URY})=($1+0,$2+0,$3+0,$4+0) if !$had_hires;
+      } elsif (($dummy eq 'hiresboundingbox' or $dummy eq 'exactboundingbox')
+          and $val=~/\A([+-]?[0-9eE.-]+)\s+([+-]?[0-9eE.-]+)\s+([+-]?[0-9eE.-]+)\s+([+-]?[0-9eE.-]+)\Z(?!\n)/
+          and  defined c_numval($1) and defined c_numval($2) and defined c_numval($3) and defined c_numval($4)
+         ) {
+        # Dat: capitalized names are: HiResBoundingBox, ExactBoundingBox
+        no integer;
+        ($bbi->{LLX},$bbi->{LLY},$bbi->{URX},$bbi->{URY})=($1+0,$2+0,$3+0,$4+0);
+        $had_hires=1;
+      }
+    }
   } elsif ($head=~/\AFORM....ILBMBMHD/s) {
     $bbi->{FileFormat}='LBM';
     ($dummy,$bbi->{URX},$bbi->{URY})=unpack("A20nn",$head);
@@ -433,6 +490,8 @@ sub img_bbox($) {
   } elsif (substr($head,0,2)eq"\x52\xCC") { # Utah Raster Toolkit RLE images; untested
     $bbi->{FileFormat}='RLE'; # from xloadimage
     ($dummy,$bbi->{URX},$bbi->{URY},$bbi->{LLX},$bbi->{LLY})=unpack("A6vvvv",$head);
+    $bbi->{BitsPerSample}=vec($head,12,8)/vec($head,11,8);
+    $bbi->{SamplesPerPixel}=vec($head,11,8);
     #0		leshort		0xcc52		RLE image data,
     #>6		leshort		x		%d x
     #>8		leshort		x		%d
@@ -456,12 +515,12 @@ sub img_bbox($) {
                              else { ($bbi->{UXY},$bbi->{URY})=(768,512) }
   } elsif ($head=~/\A\0\0..\0\0\0[\001-\50]\0\0\0[\0-\002]\0\0\0([\001-\77])/s) {
     $bbi->{FileFormat}='XWD';
-    $bbi->{SubFormat}='MSBFirst';
+    $bbi->{SubFormat}='MSBfirst';
     $bbi->{'Info.depth'}=ord($1);
     ($dummy,$bbi->{URX},$bbi->{URY})=unpack("A16NN",$head);
   } elsif ($head=~/\A..\0\0[\001-\50]\0\0\0[\0-\002]\0\0\0([\001-\77])\0\0\0/s) {
     $bbi->{FileFormat}='XWD';
-    $bbi->{SubFormat}='LSBFirst';
+    $bbi->{SubFormat}='LSBfirst';
     $bbi->{'Info.depth'}=ord($1);
     ($dummy,$bbi->{URX},$bbi->{URY})=unpack("A16VV",$head);
   } elsif ($head=~/\A\0\001\0[\010-\377](?:\0.|\001\0)\0.....(?:[\001-\37].|\0[^\0]|\40\0){2}/s) { # GEM Bit image
@@ -472,14 +531,93 @@ sub img_bbox($) {
   } elsif ($head=~/\A....\0\0\0\004....\0\0[\0-\001].\0\0[\0-\003]./s) { # McIDAS areafile
     # from xloadimage; untested
     $bbi->{FileFormat}='McIDAS';
-    $bbi->{SubFormat}='MSBFirst';
+    $bbi->{SubFormat}='MSBfirst';
     ($dummy,$bbi->{URY},$bbi->{URX})=unpack("A32NN",$head);
   } elsif ($head=~/\A....\004\0\0\0.....[\0-\001]\0\0.[\0-\003]\0\0/s) { # McIDAS areafile
     # from xloadimage; untested
     $bbi->{FileFormat}='McIDAS';
-    $bbi->{SubFormat}='LSBFirst';
+    $bbi->{SubFormat}='LSBfirst';
     ($dummy,$bbi->{URY},$bbi->{URX})=unpack("A32VV",$head);
-  
+  } elsif ($head=~/\AVIEW/) {
+    # from xv; untested
+    $dummy="NNNNNN"; $bbi->{SubFormat}='MSBfirst';
+   do_PM:
+    $bbi->{FileFormat}='PM';
+    ($dummy,$bbi->{'Info.num_planes'},$bbi->{URX},$bbi->{URY},
+     $bbi->{'Info.num_bands'}, $bbi->{'Info.pixel_format'})=unpack($dummy,$head);
+  } elsif ($head=~/\AWEIV/) {
+    $dummy="VVVVVV"; $bbi->{SubFormat}='LSBfirst';
+    goto do_PM;
+  } elsif ($head=~/\A\001\332/) { # SGI 'rgb' image data
+    $bbi->{SubFormat}='MSBfirst'; $dummy="nCCnnnn";
+   do_SGI:
+    $bbi->{FileFormat}='SGI'; # from xv IRIS; untested
+    ($dummy,$bbi->{'Info.compression'},$bbi->{'Info.precision'},$bbi->{'Info.dimension'},
+     $bbi->{URX},$bbi->{URY},$bbi->{SamplesPerPixel})=unpack($dummy,$head);
+       if ($bbi->{'Info.compression'}==0) { $bbi->{'Info.compression'}='None' }
+    elsif ($bbi->{'Info.compression'}==1) { $bbi->{'Info.compression'}='RLE' }
+    $dummy=substr($head,80);
+    $bbi->{'Info.comment'}=$1 if $dummy=~m@\A([^\0])\0@s;
+    # Dat: Info.dimension is 2 or 3
+    ## See http://reality.sgi.com/grafica/sgiimage.html
+  } elsif ($head=~/\A\332\001/) { # SGI 'rgb' image data
+    $bbi->{SubFormat}='MSBfirst'; $dummy="vCCvvvvv";
+    goto do_SGI;
+  } elsif (substr($head,0,9) eq "SIMPLE  =") {
+    $bbi->{FileFormat}='FITS';
+    while ($head!~/\bEND/) {
+      goto IOerr if 1>read $F, $head, 1024, length($head);
+    }
+    $bbi->{'Info.bits_per_pixel'}=$1 if $head=~/\bBITPIX\s*=\s*(\d+)/;
+    $bbi->{'Info.num_axis'}=$1 if $head=~/\bNAXIS\s*=\s*(\d+)/;
+    $bbi->{URX}=$1 if $head=~/\bNAXIS1\s*=\s*(\d+)/;
+    $bbi->{URY}=$1 if $head=~/\bNAXIS2\s*=\s*(\d+)/;
+    $bbi->{'Info.depth'}=$1 if $head=~/\bNAXIS3\s*=\s*(\d+)/;
+    $bbi->{'Info.data_max'}=$1 if $head=~/\bDATAMAX\s*=\s*(\d+)/;
+    $bbi->{'Info.data_min'}=$1 if $head=~/\bDATAMIN\s*=\s*(\d+)/;
+    # Dat: it would be quite hard to extract the dimensions...
+    ## FITS is the Flexible Image Transport System, the de facto standard for
+    ## data and image transfer, storage, etc., for the astronomical community.
+    ## (FITS floating point formats are big-endian.)
+    #0	string	SIMPLE\ \ =	FITS image data
+    #>109	string	8		\b, 8-bit, character or unsigned binary integer
+    #>108	string	16		\b, 16-bit, two's complement binary integer
+    #>107	string	\ 32		\b, 32-bit, two's complement binary integer
+    #>107	string	-32		\b, 32-bit, floating point, single precision
+    #>107	string	-64		\b, 64-bit, floating point, double precision
+  } elsif ($head=~/\A(?:NJPL1I|CCSD3Z|LBLSIZE=)/) {
+    # from xv, imagemagick; untested
+    $bbi->{FileFormat}='VICAR';
+    while ($head!~/\bEND/) {
+      goto IOerr if 1>read $F, $head, 1024, length($head);
+    }
+    $bbi->{URX}=$1 if $head=~/\b(?:IMAGE_LINES|LINES|NL)\s*=\s*(\d+)/;
+    $bbi->{URY}=$1 if $head=~/\b(?:LINE_SAMPLES|NS)\s*=\s*(\d+)/;
+    ##------------------------------------------------------------------------------
+    ## vicar:  file(1) magic for VICAR files.
+    ##
+    ## From: Ossama Othman <othman@astrosun.tn.cornell.edu
+    ## VICAR is JPL's in-house spacecraft image processing program
+    ## VICAR image
+    #0	string	LBLSIZE=	VICAR image data
+    #>32	string	BYTE		\b, 8 bits  = VAX byte
+    #>32	string	HALF		\b, 16 bits = VAX word     = Fortran INTEGER*2
+    #>32	string	FULL		\b, 32 bits = VAX longword = Fortran INTEGER*4
+    #>32	string	REAL		\b, 32 bits = VAX longword = Fortran REAL*4
+    #>32	string	DOUB		\b, 64 bits = VAX quadword = Fortran REAL*8
+    #>32	string	COMPLEX		\b, 64 bits = VAX quadword = Fortran COMPLEX*8
+    ## VICAR label file
+    #43	string	SFDU_LABEL	VICAR label file
+  } elsif (substr($head,0,4) eq "\361\0\100\273") { # CMU window manager raster image data; untested
+    $bbi->{FileFormat}='CMU';
+    ($dummy,$bbi->{URX},$bbi->{URY},$bbi->{'Info.num_bits'})=unpack("VVVV",$head);
+  } elsif (substr($head,0,4) eq "IT01" or substr($head,0,4) eq "IT02") { # untested
+    $bbi->{FileFormat}='FIT'; # do not cunfuse FIT and FITS
+    ($dummy,$bbi->{URX},$bbi->{URY},$bbi->{'Info.num_bits'})=unpack("NNNN",$head);
+
+## These file formats below are known to the Debian potato file(1) command,
+## but the magic(5) file doesn't tell us how to extract size information
+##
 ## NITF is defined by United States MIL-STD-2500A
 #0	string	NITF	National Imagery Transmission Format
 #>25	string	>\0	dated %.14s
@@ -488,10 +626,6 @@ sub img_bbox($) {
 #0	string		IIN1		NIFF image data
 ## ITC (CMU WM) raster files.  It is essentially a byte-reversed Sun raster,
 ## 1 plane, no encoding.
-#0	string		\361\0\100\273	CMU window manager raster image data
-#>4	lelong		>0		%d x
-#>8	lelong		>0		%d,
-#>12	lelong		>0		%d-bit
 ## Artisan
 #0	long		1123028772	Artisan image data
 #>4	long		1		\b, rectangular 24-bit
@@ -499,6 +633,8 @@ sub img_bbox($) {
 #>4	long		3		\b, rectangular 32-bit (24-bit with matte)
 #
 ## FIG (Facility for Interactive Generation of figures), an object-based format
+## (as handled by xfig). There is no size information, fig2dev saves bounding
+## box as EPS
 #0	string		#FIG		FIG image text
 #>5	string		x		\b, version %.3s
 #
@@ -525,62 +661,14 @@ sub img_bbox($) {
 #0	string	xz	MGR bitmap, old format, 1-bit deep, 32-bit aligned
 #0	string	yx	MGR bitmap, modern format, squeezed
 #
-#
-## facsimile data
-#1	string		PC\ Research,\ Inc	group 3 fax data
-#>29	byte		0		\b, normal resolution (204x98 DPI)
-#>29	byte		1		\b, fine resolution (204x196 DPI)
-#
 ## image file format (Robert Potter, potter@cs.rochester.edu)
 #0	string		Imagefile\ version-	iff image data
 ## this adds the whole header (inc. version number), informative but longish
 #>10	string		>\0		%s
 #
-#
-## SGI image file format, from Daniel Quinlan (quinlan@yggdrasil.com)
-##
-## See
-##	http://reality.sgi.com/grafica/sgiimage.html
-##
-#0	beshort		474		SGI image data
-##>2	byte		0		\b, verbatim
-##~>2	byte		1		\b, RLE
-##>3	byte		1		\b, normal precision
-#>3	byte		2		\b, high precision
-#>4	beshort		x		\b, %d-D
-#>6	beshort		x		\b, %d x
-#>8	beshort		x		%d
-#>10	beshort		x		\b, %d channel
-#>10	beshort		!1		\bs
-#>80	string		>0		\b, "%s"
-#
-#0	string		IT01		FIT image data
-#>4	belong		x		\b, %d x
-#>8	belong		x		%d x
-#>12	belong		x		%d
-##
-#0	string		IT02		FIT image data
-#>4	belong		x		\b, %d x
-#>8	belong		x		%d x
-#>12	belong		x		%d
-##
-#2048	string		PCD_IPI		Kodak Photo CD image pack file
-#0	string		PCD_OPA		Kodak Photo CD overview pack file
-#
-## FITS format.  Jeff Uphoff <juphoff@tarsier.cv.nrao.edu>
-## FITS is the Flexible Image Transport System, the de facto standard for
-## data and image transfer, storage, etc., for the astronomical community.
-## (FITS floating point formats are big-endian.)
-#0	string	SIMPLE\ \ =	FITS image data
-#>109	string	8		\b, 8-bit, character or unsigned binary integer
-#>108	string	16		\b, 16-bit, two's complement binary integer
-#>107	string	\ 32		\b, 32-bit, two's complement binary integer
-#>107	string	-32		\b, 32-bit, floating point, single precision
-#>107	string	-64		\b, 64-bit, floating point, double precision
-#
 ## other images
 #0	string	This\ is\ a\ BitMap\ file	Lisp Machine bit-array-file
-#0	string		!!		Bennet Yee's "face" format
+#0	string		\!\!		Bennet Yee's "face" format
 #
 ## From SunOS 5.5.1 "/etc/magic" - appeared right before Sun raster image
 ## stuff.
@@ -590,25 +678,52 @@ sub img_bbox($) {
 ## Visio drawings
 #03000	string	Visio\ (TM)\ Drawing			%s
 #
-    #0	string		IC		PC icon data
-    #0	string		PI		PC pointer image data
-    #0	string		CI		PC color icon data
-    #0	string		CP		PC color pointer image data
-##------------------------------------------------------------------------------
-## vicar:  file(1) magic for VICAR files.
-##
-## From: Ossama Othman <othman@astrosun.tn.cornell.edu
-## VICAR is JPL's in-house spacecraft image processing program
-## VICAR image
-#0	string	LBLSIZE=	VICAR image data
-#>32	string	BYTE		\b, 8 bits  = VAX byte
-#>32	string	HALF		\b, 16 bits = VAX word     = Fortran INTEGER*2
-#>32	string	FULL		\b, 32 bits = VAX longword = Fortran INTEGER*4
-#>32	string	REAL		\b, 32 bits = VAX longword = Fortran REAL*4
-#>32	string	DOUB		\b, 64 bits = VAX quadword = Fortran REAL*8
-#>32	string	COMPLEX		\b, 64 bits = VAX quadword = Fortran COMPLEX*8
-## VICAR label file
-#43	string	SFDU_LABEL	VICAR label file
+#0	string		IC		PC icon data
+#0	string		PI		PC pointer image data
+#0	string		CI		PC color icon data
+#0	string		CP		PC color pointer image data
+
+  } elsif (substr($head,0,2) eq "\37\x9d") {
+    # .Z compress(1)ed file; may be an image (i.e pbm.Z)
+    $bbi->{FileFormat}='compress'; $bbi->{SubFormat}='compress';
+  } elsif (substr($head,0,2) eq "\37\x8b") {
+    $bbi->{FileFormat}='compress'; $bbi->{SubFormat}='gzip';
+  } elsif (substr($head,0,2) eq "\37\x36") {
+    $bbi->{FileFormat}='compress'; $bbi->{SubFormat}='pack';
+  } elsif ($head=~/\A(?:\377\037|\037\377)/) {
+    $bbi->{FileFormat}='compress'; $bbi->{SubFormat}='compact';
+  } elsif (substr($head,0,3) eq "BZh") {
+    $bbi->{FileFormat}='compress'; $bbi->{SubFormat}='bzip2';
+  } elsif (substr($head,0,2) eq "BZ") { # check must be after bzip
+    $bbi->{FileFormat}='compress'; $bbi->{SubFormat}='bzip1';
+  } elsif (substr($head,0,2) eq "\x76\xff") {
+    $bbi->{FileFormat}='compress'; $bbi->{SubFormat}='squeeze';
+  } elsif (substr($head,0,2) eq "\x76\xfe") {
+    $bbi->{FileFormat}='compress'; $bbi->{SubFormat}='crunch';
+  } elsif (substr($head,0,2) eq "\x76\xfd") {
+    $bbi->{FileFormat}='compress'; $bbi->{SubFormat}='LZH';
+  } elsif (substr($head,0,2) eq "\037\237") {
+    $bbi->{FileFormat}='compress'; $bbi->{SubFormat}='freeze2';
+  } elsif (substr($head,0,2) eq "\037\236") {
+    $bbi->{FileFormat}='compress'; $bbi->{SubFormat}='freeze1';
+  } elsif (substr($head,0,2) eq "\037\240") {
+    $bbi->{FileFormat}='compress'; $bbi->{SubFormat}='SCO.LZH';
+  } elsif (substr($head,0,9) eq "\x89\x4c\x5a\x4f\x00\x0d\x0a\x1a\x0a") {
+    $bbi->{FileFormat}='compress'; $bbi->{SubFormat}='lzop';
+
+  } elsif (substr($head,0,2) eq "\x60\xEA") {
+    $bbi->{FileFormat}='archive'; $bbi->{SubFormat}='ARJ';
+  } elsif ($head=~/\A..-l[hz]/s) {
+    $bbi->{FileFormat}='archive'; $bbi->{SubFormat}='LHA';
+  } elsif (substr($head,0,4) eq "Rar!") {
+    $bbi->{FileFormat}='archive'; $bbi->{SubFormat}='RAR';
+  } elsif (substr($head,0,4) eq "UC2\x1A") {
+    $bbi->{FileFormat}='archive'; $bbi->{SubFormat}='UC2';
+  } elsif (substr($head,0,4) eq "PK\003\004") {
+    $bbi->{FileFormat}='archive'; $bbi->{SubFormat}='ZIP';
+  } elsif (substr($head,0,4) eq "\xDC\xA7\xC4\xFD") {
+    $bbi->{FileFormat}='archive'; $bbi->{SubFormat}='ZOO';
+
   } elsif ($head=~/\A.PC Research, Inc/s) {
     $bbi->{FileFormat}='G3';
     $bbi->{SubFormat}='Digifax';
@@ -686,7 +801,14 @@ sub img_bbox($) {
 # my $filename="examples/Far.ico";
 # my $filename="examples/boomlink.psd";
 # my $filename="examples/ptsbanner.xwd";
-my $filename="examples/t.g3";
+# my $filename="examples/t.g3";
+# my $filename="examples/t.gz";
+# my $filename="examples/t.fits";
+# my $filename="examples/t.zip";
+# my $filename="examples/t.sgi";
+# my $filename="examples/test.ps";
+# my $filename="examples/test_atend.eps";
+my $filename="examples/test.pdf";
 
 die "$0: $filename: $!\n" unless open F, "< $filename";
 my $bbi=img_bbox(\*F);
