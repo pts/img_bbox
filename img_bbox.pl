@@ -16,10 +16,9 @@ eval '(exit $?0)' && eval 'PERL_BADLANG=x;PATH="$PATH:.";export PERL_BADLANG\
 # Dat: only in xloadimage: g3Ident,        g3Load,        "G3 FAX Image", (hard to identify file format)
 # Dat: only in xloadimage: macIdent,       macLoad,       "MacPaint Image", (stupid, black-white)
 #
-#
-use integer;
-use strict;
-use Data::Dumper;
+use integer; # important
+use strict; # not so important
+# use Data::Dumper;
 
 # Dat: BBoxInfo is a hashref:
 # Dat: Info.* keys has FileFormat-dependent meaning (thus Info.depth may have
@@ -812,10 +811,30 @@ sub img_bbox($) {
 # my $filename="examples/t.sgi";
 # my $filename="examples/test.ps";
 # my $filename="examples/test_atend.eps";
-my $filename="examples/test.pdf";
+# my $filename="examples/test.pdf";
+# my $filename="/tmp/PLRM.pdf";
+# my $filename="/tmp/PDFRef.pdf";
+# my $filename="/tmp/fsproto.pdf";
+# my $filename="examples/a-gth-1.pdf";
+# my $filename="examples/hello.pdf";
+# my $filename="/home/guests/pts/eg/bssz/szamelmszig_tetelsorA_kidolgozott.php.pdf";
+# my $filename="/home/guests/pts/eg/ele/elovizsga2001.pdf";
+# my $filename="/home/guests/pts/eg/th/lm2.pdf";
 
-die "$0: $filename: $!\n" unless open F, "< $filename";
-my $bbi=img_bbox(\*F);
-print Dumper($bbi);
+sub work(@) {
+  my $filename=$_[0];
+  die "$0: $filename: $!\n" unless open F, "< $filename";
+  print STDERR "$filename\n";
+  my $bbi=img_bbox(\*F);
+  # print "$filename: ", Dumper($bbi);
+  my $LLX=defined $bbi->{LLX} ? $bbi->{LLX} : "??";
+  my $LLY=defined $bbi->{LLY} ? $bbi->{LLY} : "??";
+  my $URX=defined $bbi->{URX} ? $bbi->{URX} : "??";
+  my $URY=defined $bbi->{URY} ? $bbi->{URY} : "??";
+  my $Error=defined $bbi->{Error} ? " error:$bbi->{Error}" : "";
+  print "$filename $LLX $LLY $URX $URY$Error\n";
+}
 
+if (@ARGV) { for my $filename (@ARGV) { work $filename } }
+      else { work $filename }
 __END__
