@@ -2146,7 +2146,7 @@ sub work($$;$) {
     }
     if (defined $gotexe) {
       my $result=readpipe(shq($gotexe).
-        " -identify -noautosub -vo null -ao null -frames 0 -- ".
+        " -noautosub -vo null -ao null -frames 0 -identify -- ".
 	shq($filename)." 2>&1");
 # Dat: example:
 # ...
