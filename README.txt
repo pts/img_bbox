@@ -23,9 +23,8 @@ Advantages of img_bbox.pl over mediafileinfo.py:
 
 * It can get PDF width and height for many old PDF files without an xref
   stream.
-* It can get DVI width and height.
 * If reports the full (4-coordinate) and high resolution bounding box for
-  PostScript documents.
+  PostScript and DVI documents.
 * It supports many obscure old (pre-2000) image file formats.
 
 Advantages of mediafileinfo.py over img_bbox.pl:
@@ -41,8 +40,10 @@ Advantages of mediafileinfo.py over img_bbox.pl:
   read.
 
 Advantages of both mediafileinfo.py and img_bbox.pl over the Linux file(1)
-command (https://www.gnu.org/software/fileutils/fileutils.html):
+command (https://www.gnu.org/software/fileutils/fileutils.html) and
+binwalk (https://github.com/ReFirmLabs/binwalk):
 
-* They 
+* They (the former) can detect image width and height even for file formats
+  (e.g. JPEG) where the file offset of these fields is not constant.
 
 __END__
