@@ -796,13 +796,16 @@ sub calc($) {
     #>24	belong		1		RGB colormap
     #>24	belong		2		raw colormap
     #>28	belong		>0		colormap is %d bytes long
-  } elsif (substr($head,0,4)eq"\xf1\x00\40\xbb") {
-    $bbi->{FileFormat}='CMUWM'; # from xloadimage; untested
+  } elsif (substr($head,0,4)eq"\xf1\x00\x40\xbb") { # CMU window manager raster image data
+    # http://fileformats.archiveteam.org/wiki/CMU_Window_Manager_bitmap
+    $bbi->{FileFormat}='CMUWM'; # from xloadimage, also netpbm cmuwmtopbm.c and cmuwm.h
+    $bbi->{SubFormat}='MSBfirst';
     ($dummy,$bbi->{URX},$bbi->{URY},$bbi->{"Info.depth"})=unpack("NNNn",$head);
-  } elsif (substr($head,0,4) eq "\361\0\100\273") { # CMU window manager raster image data
-    # from xvl untested
-    $bbi->{FileFormat}='CMUWM';
-    ($dummy,$bbi->{URX},$bbi->{URY},$bbi->{'Info.num_bits'})=unpack("VVVV",$head);
+  } elsif (substr($head,0,4)eq"\xbb\x40\x00\xf1") { # CMU window manager raster image data
+    # http://fileformats.archiveteam.org/wiki/CMU_Window_Manager_bitmap
+    $bbi->{FileFormat}='CMUWM'; # from xloadimage, also netpbm cmuwmtopbm.c and cmuwm.h
+    $bbi->{SubFormat}='LSBfirst';
+    ($dummy,$bbi->{URX},$bbi->{URY},$bbi->{"Info.depth"})=unpack("VVVv",$head);
   } elsif (substr($head,0,2)eq"\x52\xCC") { # Utah Raster Toolkit RLE images; untested
     $bbi->{FileFormat}='RLE'; # from xloadimage
     ($dummy,$bbi->{URX},$bbi->{URY},$bbi->{LLX},$bbi->{LLY})=unpack("A6vvvv",$head);
@@ -1738,7 +1741,8 @@ my @formats=(
 ['image.PSD', sub{begins$_[0],"8BPS"}, '.psd', [], 'PSD Adobe Photoshop image'],
 ['image.FBM', sub{begins$_[0],"\%bitmap\0"}, '.fmb', [], 'FBM Fuzzy Bitmap image'],
 ['image.SunRaster', sub{begins$_[0],"\x59\xa6\x6a\x95"}, '.ras', [], 'Sun Raster image'],
-['image.CMUWM', sub{begins$_[0],"\361\0\100\273"}, '.cmuwm', [qw(.cmu)], 'CMUWM image'],
+['image.CMUWM.MSBfirst', sub{begins$_[0],"\xf1\x00\x40\xbb"}, '.cmuwm', [qw(.cmu)], 'CMUWM image'],
+['image.CMUWM.LSBfirst', sub{begins$_[0],"\xbb\x40\x00\xf1"}, '.cmuwm', [qw(.cmu)], 'CMUWM image'],
 ['image.RLE', sub{begins$_[0],"\x52\xCC"}, '.rle', [], 'RLE Utah image'],
 ['image.PCD', sub{begins$_[0],"\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377"}, '.pcd', [qw(.photocd .cd)], 'PCD Kodak Photo CD image'],
 ['image.XWD.MSBfirst', sub{$_[0]=~/\A\0\0..\0\0\0[\001-\50]\0\0\0[\0-\002]\0\0\0([\001-\77])/s}, '.xwd', [], 'XWD image'],
