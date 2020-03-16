@@ -214,12 +214,12 @@ sub calc($) {
   #** BBoxInfo to return
   my $bbi={
     # 'FileFormat' => '.IO.error',
-    'FileFormat' => 'unknown',
     'LLX' => 0, 'LLY' => 0, # may be float; in `bp'
     # 'URX' => 0, 'URY' => 0 # default: missing; may be float; in `bp'
   };
+  goto done if !defined($F);
   binmode $F;
-  if (0>read $F, $head, 256) { IOerr: $bbi->{Error}="IO: $!"; goto done }
+  if (0>read $F, $head, 256) { $bbi->{FileFormat} = 'read_error'; IOerr: $bbi->{Error}="IO: $!"; goto done }
   if (length($head)==0) { $bbi->{FileFormat}='Empty'; return $bbi }
   if ($head=~m@\A\s*/[*]\s+XPM\s+[*]/@) { # XPM
     $bbi->{FileFormat}='XPM';
@@ -1088,6 +1088,7 @@ sub calc($) {
     $bbi->{Error}='format?' # Dat: unrecognised FileFormat
   }
  done:
+  $bbi->{FileFormat} = 'unknown' if !defined($bbi->{FileFormat});
   if ($have_paper and exists $bbi->{URX} and exists $bbi->{URY}) {
     ($bbi->{Paper},$bbi->{PaperWidth},$bbi->{PaperHeight})=@L[0,1,2] if
       @L=Htex::papers::valid_bp($bbi->{URX},$bbi->{URY},$bbi->{LLX},$bbi->{LLY});
@@ -2227,6 +2228,7 @@ sub work($$;$) {
       ## print STDERR "$filename\n";
       $bbi=calc(\*F);
     } else {
+      $bbi=calc(undef);
       $bbi->{Error}="open: $!"
     }
   }
