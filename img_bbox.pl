@@ -382,7 +382,7 @@ sub calc($) {
     $bbi->{FileFormat}='Cineon';
     goto SYerr if 208>length$head;
     ($bbi->{URS},$bbi->{URY})=unpack("NN",substr($head,200));
-  } elsif (substr($head,43,2)eq"\x39\x30") { # Dat: untested
+  } elsif (length($head) >= 45 and substr($head,43,2)eq"\x39\x30") { # Dat: untested
     $bbi->{FileFormat}='BioRad';
     ($bbi->{URX},$bbi->{URY},$bbi->{'Info.num_pages'})=unpack("nnn",$head);
   } elsif ($head=~/\A(\377+\330)\377/) {
